@@ -36,12 +36,16 @@ class AnthropicClient:
 
     DEFAULT_MODEL = "claude-sonnet-4-6"
     DEFAULT_MAX_TOKENS = 4096
+    DEFAULT_MAX_RETRIES = 3
+    DEFAULT_TIMEOUT = 120.0
 
     def __init__(
         self,
         model: str | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         api_key: str | None = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         # Imported lazily so importing this module doesn't require the
         # SDK if a caller only wants the Protocol type.
@@ -49,8 +53,10 @@ class AnthropicClient:
 
         self.model: str = model or self.DEFAULT_MODEL
         self.max_tokens: int = max_tokens
-        self._client = (
-            anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+        self._client = anthropic.Anthropic(
+            api_key=api_key or None,
+            max_retries=max_retries,
+            timeout=timeout,
         )
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
@@ -69,15 +75,8 @@ class AnthropicClient:
 
 
 def load_env() -> None:
-    """Load ``.env`` and tolerate a known autocorrect typo.
-
-    Some editors autocorrect ``ANTHROPIC`` to ``PATHOLOGY``. If that
-    alias is present and the canonical name isn't, copy it over so
-    the Anthropic SDK finds the key.
-    """
+    """Load ``.env`` so the Anthropic SDK can find ``ANTHROPIC_API_KEY``."""
     load_dotenv()
-    if not os.getenv("ANTHROPIC_API_KEY") and os.getenv("PATHOLOGY_API_KEY"):
-        os.environ["ANTHROPIC_API_KEY"] = os.environ["PATHOLOGY_API_KEY"]
 
 
 def _main() -> int:

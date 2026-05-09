@@ -63,6 +63,30 @@ class StripFencesTests(unittest.TestCase):
         out = converter._strip_code_fences(VALID_WORKFLOW)
         self.assertEqual(out.rstrip() + "\n", VALID_WORKFLOW)
 
+    def test_extracts_from_preamble(self) -> None:
+        raw = "Here is the converted workflow:\n\n```yaml\n" + VALID_WORKFLOW.rstrip() + "\n```"
+        out = converter._strip_code_fences(raw)
+        self.assertTrue(out.startswith("name: CI"))
+        self.assertNotIn("```", out)
+        self.assertNotIn("Here is", out)
+
+    def test_extracts_from_preamble_and_trailing_commentary(self) -> None:
+        raw = (
+            "Sure! Here you go:\n\n```yaml\n"
+            + VALID_WORKFLOW.rstrip()
+            + "\n```\n\nLet me know if you need changes."
+        )
+        out = converter._strip_code_fences(raw)
+        self.assertTrue(out.startswith("name: CI"))
+        self.assertNotIn("```", out)
+        self.assertNotIn("Let me know", out)
+
+    def test_extracts_without_trailing_newline_before_fence(self) -> None:
+        raw = "```yaml\n" + VALID_WORKFLOW.rstrip() + "```"
+        out = converter._strip_code_fences(raw)
+        self.assertTrue(out.startswith("name: CI"))
+        self.assertNotIn("```", out)
+
 
 class ShapeAssertionTests(unittest.TestCase):
     """Parameterized via unittest.subTest (Meszaros: avoid Test Code Duplication
@@ -131,6 +155,29 @@ class ConvertTests(unittest.TestCase):
         converter.convert("pipeline { agent any }", feedback="- Use checkout@v4", client=fake)
         self.assertIn("Reviewer feedback", fake.last_user_prompt)
         self.assertIn("- Use checkout@v4", fake.last_user_prompt)
+
+    def test_convert_includes_previous_workflow_with_feedback(self) -> None:
+        fake = FakeClient(response=VALID_WORKFLOW)
+        prev = "name: CI\non:\n  push:\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+        converter.convert(
+            "pipeline { agent any }",
+            feedback="- Fix checkout",
+            previous_workflow=prev,
+            client=fake,
+        )
+        self.assertIn("Previous GitHub Actions workflow", fake.last_user_prompt)
+        self.assertIn("runs-on: ubuntu-latest", fake.last_user_prompt)
+        self.assertIn("Reviewer feedback", fake.last_user_prompt)
+
+    def test_convert_omits_previous_workflow_without_feedback(self) -> None:
+        """On the first iteration (no feedback), previous_workflow is ignored."""
+        fake = FakeClient(response=VALID_WORKFLOW)
+        converter.convert(
+            "pipeline { agent any }",
+            previous_workflow="name: old\n",
+            client=fake,
+        )
+        self.assertNotIn("Previous GitHub Actions workflow", fake.last_user_prompt)
 
     def test_convert_rejects_non_workflow_response(self) -> None:
         fake = FakeClient(response="Sorry, I cannot do that.")

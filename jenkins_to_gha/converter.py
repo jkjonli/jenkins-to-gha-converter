@@ -18,21 +18,23 @@ from .llm_client import AnthropicClient, LLMClient, load_env
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "converter_system.md"
 
-_FENCED_WHOLE_RE = re.compile(
-    r"^\s*```(?:[Yy][Aa]?[Mm][Ll]|yml)?\s*\n(?P<body>.*?)\n```\s*\Z",
+_FENCED_BLOCK_RE = re.compile(
+    r"```(?:[Yy][Aa]?[Mm][Ll]|yml)?\s*\n(?P<body>.*?)```",
     re.DOTALL,
 )
 
 
 def _strip_code_fences(text: str) -> str:
-    """Remove a leading/trailing ```yaml ... ``` fence if the whole
-    response is wrapped in one. Otherwise return the text unchanged
-    (but stripped of surrounding whitespace)."""
-    stripped_text = text.strip()
-    fence_match = _FENCED_WHOLE_RE.match(stripped_text)
+    """Extract the YAML from the first fenced code block in the response.
+
+    Handles conversational preamble (e.g. "Here is the workflow:"),
+    trailing commentary, and missing trailing newlines. If no fence is
+    found, falls back to the full text stripped of whitespace.
+    """
+    fence_match = _FENCED_BLOCK_RE.search(text)
     if fence_match:
-        stripped_text = fence_match.group("body").strip()
-    return stripped_text + "\n"
+        return fence_match.group("body").strip() + "\n"
+    return text.strip() + "\n"
 
 
 def _find_first_nonblank_line(text: str) -> str:
@@ -54,14 +56,31 @@ def _assert_workflow_shape(yaml_text: str) -> None:
         )
 
 
-def _build_user_message(jenkinsfile_text: str, feedback: str | None) -> str:
+def _build_user_message(
+    jenkinsfile_text: str,
+    feedback: str | None,
+    previous_workflow: str | None = None,
+) -> str:
     parts = [
         "# Jenkinsfile (source)",
         "```groovy",
         jenkinsfile_text.rstrip("\n"),
         "```",
     ]
-    if feedback:
+    if previous_workflow and feedback:
+        parts.extend(
+            [
+                "",
+                "# Previous GitHub Actions workflow (revise this)",
+                "```yaml",
+                previous_workflow.rstrip("\n"),
+                "```",
+                "",
+                "# Reviewer feedback (iterate to address each point)",
+                feedback.rstrip("\n"),
+            ]
+        )
+    elif feedback:
         parts.extend(
             [
                 "",
@@ -74,6 +93,11 @@ def _build_user_message(jenkinsfile_text: str, feedback: str | None) -> str:
 
 def load_system_prompt() -> str:
     """Read the converter system prompt from disk."""
+    if not _PROMPT_PATH.exists():
+        raise FileNotFoundError(
+            f"Converter system prompt not found at {_PROMPT_PATH}. "
+            "Ensure the prompts/ directory is present in the project root."
+        )
     return _PROMPT_PATH.read_text(encoding="utf-8")
 
 
@@ -82,6 +106,7 @@ def convert(
     feedback: str | None = None,
     client: LLMClient | None = None,
     system_prompt: str | None = None,
+    previous_workflow: str | None = None,
 ) -> str:
     """Convert Jenkinsfile text to a GitHub Actions workflow YAML string.
 
@@ -93,6 +118,8 @@ def convert(
             packaged ``prompts/converter_system.md`` is loaded from disk.
             Injecting an explicit string lets callers (and tests) avoid
             filesystem coupling.
+        previous_workflow: The workflow from the prior iteration, included
+            so the converter can revise it rather than regenerate from scratch.
 
     Returns:
         A YAML string (terminated by a newline). Shape-checked but not
@@ -103,7 +130,7 @@ def convert(
         client = AnthropicClient()
     if system_prompt is None:
         system_prompt = load_system_prompt()
-    user_prompt = _build_user_message(jenkinsfile_text, feedback)
+    user_prompt = _build_user_message(jenkinsfile_text, feedback, previous_workflow)
     raw_completion = client.complete(system_prompt=system_prompt, user_prompt=user_prompt)
     yaml_text = _strip_code_fences(raw_completion)
     _assert_workflow_shape(yaml_text)
