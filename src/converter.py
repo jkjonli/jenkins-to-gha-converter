@@ -30,14 +30,14 @@ def _strip_code_fences(text: str) -> str:
     """Remove a leading/trailing ```yaml ... ``` fence if the whole
     response is wrapped in one. Otherwise return the text unchanged
     (but stripped of surrounding whitespace)."""
-    s = text.strip()
-    m = _FENCED_WHOLE_RE.match(s)
-    if m:
-        s = m.group("body").strip()
-    return s + "\n"
+    stripped_text = text.strip()
+    fence_match = _FENCED_WHOLE_RE.match(stripped_text)
+    if fence_match:
+        stripped_text = fence_match.group("body").strip()
+    return stripped_text + "\n"
 
 
-def _first_nonblank_line(text: str) -> str:
+def _find_first_nonblank_line(text: str) -> str:
     for line in text.splitlines():
         if line.strip() and not line.lstrip().startswith("#"):
             return line
@@ -46,18 +46,18 @@ def _first_nonblank_line(text: str) -> str:
 
 def _assert_workflow_shape(yaml_text: str) -> None:
     """Raise ValueError if the text does not look like a GitHub Actions workflow."""
-    first = _first_nonblank_line(yaml_text)
+    first_line = _find_first_nonblank_line(yaml_text)
     # `on` is a YAML 1.1 boolean, so the model may emit `'on':` or `"on":`.
-    ok = (
-        first.startswith("name:")
-        or first.startswith("on:")
-        or first.startswith("'on':")
-        or first.startswith('"on":')
+    has_valid_trigger = (
+        first_line.startswith("name:")
+        or first_line.startswith("on:")
+        or first_line.startswith("'on':")
+        or first_line.startswith('"on":')
     )
-    if not ok:
+    if not has_valid_trigger:
         raise ValueError(
             "converter output does not look like a GitHub Actions workflow "
-            f"(first non-blank line: {first!r})"
+            f"(first non-blank line: {first_line!r})"
         )
 
 
@@ -103,10 +103,10 @@ def convert(
     if client is None:
         load_env()
         client = AnthropicClient()
-    system = load_system_prompt()
-    user = _build_user_message(jenkinsfile_text, feedback)
-    raw = client.complete(system=system, user=user)
-    yaml_text = _strip_code_fences(raw)
+    system_prompt = load_system_prompt()
+    user_prompt = _build_user_message(jenkinsfile_text, feedback)
+    raw_completion = client.complete(system_prompt=system_prompt, user_prompt=user_prompt)
+    yaml_text = _strip_code_fences(raw_completion)
     _assert_workflow_shape(yaml_text)
     return yaml_text
 

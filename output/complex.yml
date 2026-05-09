@@ -7,8 +7,7 @@ on:
 env:
   APP_ENV: ci
 jobs:
-  checkout-and-prepare-and-build:
-    name: Build
+  checkout-and-build:
     runs-on: ubuntu-latest
     container:
       image: gradle:8.7.0-jdk17-alpine
@@ -16,9 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Prepare Tools
-        run: |
-          apk add --no-cache bash git jq
-          jq --version
+        run: apk add --no-cache bash git jq
+      - name: Verify jq
+        run: jq --version
       - name: Build
         run: ./gradlew --no-daemon clean build
       - uses: actions/upload-artifact@v4
@@ -27,6 +26,7 @@ jobs:
           name: build-libs
           path: build/libs/*.jar
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: build-test-results
           path: build/test-results/test/*.xml
@@ -36,19 +36,20 @@ jobs:
     container:
       image: gradle:8.7.0-jdk17-alpine
       options: --user root
-    needs: checkout-and-prepare-and-build
+    needs: checkout-and-build
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: build-libs
           path: build/libs
+      - name: Unit Tests
+        run: ./gradlew --no-daemon test
       - uses: actions/download-artifact@v4
+        if: always()
         with:
           name: build-test-results
           path: build/test-results/test
-      - name: Unit Tests
-        run: ./gradlew --no-daemon test
       - uses: dorny/test-reporter@v1
         if: always()
         with:
@@ -61,13 +62,9 @@ jobs:
     container:
       image: gradle:8.7.0-jdk17-alpine
       options: --user root
-    needs: checkout-and-prepare-and-build
+    needs: checkout-and-build
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: build-libs
-          path: build/libs
       - name: Lint
         run: ./gradlew --no-daemon check
   publish-artifacts:
@@ -85,7 +82,7 @@ jobs:
   post-always:
     name: Post Always
     runs-on: ubuntu-latest
-    needs: [ checkout-and-prepare-and-build, unit-tests, lint, publish-artifacts ]
+    needs: [ unit-tests, lint, publish-artifacts ]
     if: always()
     steps:
       - uses: actions/download-artifact@v4

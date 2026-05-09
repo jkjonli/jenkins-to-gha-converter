@@ -10,8 +10,7 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
       - name: Build
         run: ./gradlew --no-daemon clean build
       - name: Test
@@ -20,6 +19,7 @@ jobs:
         if: always()
         uses: dorny/test-reporter@v1
         with:
+          name: JUnit Tests
           reporter: java-junit
           path: build/test-results/test/*.xml
       - name: Archive Artifacts

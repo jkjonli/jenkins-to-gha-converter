@@ -16,17 +16,17 @@ from src import converter
 @dataclass
 class FakeClient:
     """Test double for LLMClient that returns a canned response and
-    records the last (system, user) pair it was called with."""
+    records the last (system_prompt, user_prompt) pair it was called with."""
 
     response: str
-    last_system: str = ""
-    last_user: str = ""
+    last_system_prompt: str = ""
+    last_user_prompt: str = ""
     calls: list[tuple[str, str]] = field(default_factory=list)
 
-    def complete(self, system: str, user: str) -> str:
-        self.last_system = system
-        self.last_user = user
-        self.calls.append((system, user))
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        self.last_system_prompt = system_prompt
+        self.last_user_prompt = user_prompt
+        self.calls.append((system_prompt, user_prompt))
         return self.response
 
 
@@ -94,15 +94,15 @@ class ConvertTests(unittest.TestCase):
         fake = FakeClient(response=VALID_WORKFLOW)
         jf = "pipeline { agent any; stages { stage('X') { steps { sh 'echo hi' } } } }"
         converter.convert(jf, client=fake)
-        self.assertIn(jf, fake.last_user)
-        self.assertIn("```groovy", fake.last_user)
-        self.assertNotIn("Reviewer feedback", fake.last_user)
+        self.assertIn(jf, fake.last_user_prompt)
+        self.assertIn("```groovy", fake.last_user_prompt)
+        self.assertNotIn("Reviewer feedback", fake.last_user_prompt)
 
     def test_convert_includes_feedback_when_provided(self) -> None:
         fake = FakeClient(response=VALID_WORKFLOW)
         converter.convert("pipeline { agent any }", feedback="- Use checkout@v4", client=fake)
-        self.assertIn("Reviewer feedback", fake.last_user)
-        self.assertIn("- Use checkout@v4", fake.last_user)
+        self.assertIn("Reviewer feedback", fake.last_user_prompt)
+        self.assertIn("- Use checkout@v4", fake.last_user_prompt)
 
     def test_convert_rejects_non_workflow_response(self) -> None:
         fake = FakeClient(response="Sorry, I cannot do that.")
@@ -113,8 +113,8 @@ class ConvertTests(unittest.TestCase):
         fake = FakeClient(response=VALID_WORKFLOW)
         converter.convert("pipeline { agent any }", client=fake)
         # System prompt should contain a key phrase from our authored file.
-        self.assertIn("GitHub Actions", fake.last_system)
-        self.assertIn("Mapping table", fake.last_system)
+        self.assertIn("GitHub Actions", fake.last_system_prompt)
+        self.assertIn("Mapping table", fake.last_system_prompt)
 
 
 if __name__ == "__main__":

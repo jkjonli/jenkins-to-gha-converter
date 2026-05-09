@@ -22,8 +22,8 @@ from dotenv import load_dotenv
 class LLMClient(Protocol):
     """Minimal LLM interface: a single text-in, text-out completion."""
 
-    def complete(self, system: str, user: str) -> str:
-        """Return the model's text response given a system and user message."""
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        """Return the model's text response given a system and user prompt."""
         ...
 
 
@@ -53,16 +53,16 @@ class AnthropicClient:
             anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
         )
 
-    def complete(self, system: str, user: str) -> str:
-        resp = self._client.messages.create(
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        response = self._client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
         )
         # Claude responses are a list of content blocks; join text blocks.
         parts: list[str] = []
-        for block in resp.content:
+        for block in response.content:
             if getattr(block, "type", None) == "text":
                 parts.append(block.text)
         return "".join(parts)
@@ -87,8 +87,8 @@ def _main() -> int:
         return 2
     client: LLMClient = AnthropicClient(max_tokens=32)
     reply = client.complete(
-        system="You are a terse assistant. Reply with exactly one word.",
-        user="Say the word 'pong' and nothing else.",
+        system_prompt="You are a terse assistant. Reply with exactly one word.",
+        user_prompt="Say the word 'pong' and nothing else.",
     )
     print(f"model={client.model!r}")
     print(f"reply={reply!r}")
