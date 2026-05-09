@@ -114,7 +114,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) != 2:
-        print("usage: python -m src.converter <path/to/Jenkinsfile>", file=sys.stderr)
+        print("usage: python -m jenkins_to_gha.converter <path/to/Jenkinsfile>", file=sys.stderr)
         raise SystemExit(2)
     src = Path(sys.argv[1]).read_text(encoding="utf-8")
     sys.stdout.write(convert(src))

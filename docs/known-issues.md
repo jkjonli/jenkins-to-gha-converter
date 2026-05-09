@@ -1,6 +1,6 @@
 # Known issues from converter v1 (Phase 1 smoke tests)
 
-These are issues observed when running `src.converter` in isolation
+These are issues observed when running `jenkins_to_gha.converter` in isolation
 against the two sample Jenkinsfiles. They are exactly the kinds of
 problems the Phase 2 reviewer agent + `actionlint` grounding are meant
 to catch. None of them prevent `actionlint` from passing the YAML as
@@ -9,8 +9,8 @@ syntactically valid; they are semantic or pragmatic gaps.
 Run that produced these outputs:
 
 ```
-python -m src.converter samples/simple.Jenkinsfile > output/simple.yml
-python -m src.converter samples/complex.Jenkinsfile > output/complex.yml
+python -m jenkins_to_gha.converter samples/simple.Jenkinsfile > output/simple.yml
+python -m jenkins_to_gha.converter samples/complex.Jenkinsfile > output/complex.yml
 actionlint output/simple.yml      # clean
 actionlint output/complex.yml     # clean
 ```

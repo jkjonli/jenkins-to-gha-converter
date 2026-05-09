@@ -7,7 +7,7 @@ without touching converter/reviewer code.
 Running this module directly performs a round-trip sanity check against
 the default backend::
 
-    python -m src.llm_client
+    python -m jenkins_to_gha.llm_client
 """
 from __future__ import annotations
 

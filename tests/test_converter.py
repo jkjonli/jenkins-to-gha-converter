@@ -1,4 +1,4 @@
-"""Unit tests for src.converter post-processing (no network calls).
+"""Unit tests for jenkins_to_gha.converter post-processing (no network calls).
 
 Run with either::
 
@@ -12,7 +12,7 @@ import unittest
 from dataclasses import dataclass, field
 from unittest import mock
 
-from src import converter
+from jenkins_to_gha import converter
 
 
 @dataclass
