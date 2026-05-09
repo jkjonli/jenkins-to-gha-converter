@@ -46,8 +46,8 @@ def _assert_workflow_shape(yaml_text: str) -> None:
     """Raise ValueError if the text does not look like a GitHub Actions workflow."""
     first_line = _find_first_nonblank_line(yaml_text)
     # `on` is a YAML 1.1 boolean, so the model may emit `'on':` or `"on":`.
-    has_valid_trigger = first_line.startswith(("name:", "on:", "'on':", '"on":'))
-    if not has_valid_trigger:
+    has_valid_workflow_prefix = first_line.startswith(("name:", "on:", "'on':", '"on":'))
+    if not has_valid_workflow_prefix:
         raise ValueError(
             "converter output does not look like a GitHub Actions workflow "
             f"(first non-blank line: {first_line!r})"

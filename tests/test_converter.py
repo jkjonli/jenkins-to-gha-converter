@@ -120,9 +120,9 @@ class ConvertTests(unittest.TestCase):
 
     def test_convert_passes_jenkinsfile_to_user_message(self) -> None:
         fake = FakeClient(response=VALID_WORKFLOW)
-        jf = "pipeline { agent any; stages { stage('X') { steps { sh 'echo hi' } } } }"
-        converter.convert(jf, client=fake)
-        self.assertIn(jf, fake.last_user_prompt)
+        jenkinsfile_text = "pipeline { agent any; stages { stage('X') { steps { sh 'echo hi' } } } }"
+        converter.convert(jenkinsfile_text, client=fake)
+        self.assertIn(jenkinsfile_text, fake.last_user_prompt)
         self.assertIn("```groovy", fake.last_user_prompt)
         self.assertNotIn("Reviewer feedback", fake.last_user_prompt)
 
