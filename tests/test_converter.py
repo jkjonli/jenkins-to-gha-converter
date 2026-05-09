@@ -116,6 +116,19 @@ class ConvertTests(unittest.TestCase):
         self.assertIn("GitHub Actions", fake.last_system_prompt)
         self.assertIn("Mapping table", fake.last_system_prompt)
 
+    def test_convert_accepts_injected_system_prompt(self) -> None:
+        """DI seam: an explicit system_prompt must be passed through verbatim
+        without touching the disk-loaded prompt."""
+        fake = FakeClient(response=VALID_WORKFLOW)
+        custom_prompt = "TEST-ONLY system prompt: emit a valid workflow."
+        converter.convert(
+            "pipeline { agent any }",
+            client=fake,
+            system_prompt=custom_prompt,
+        )
+        self.assertEqual(fake.last_system_prompt, custom_prompt)
+        self.assertNotIn("Mapping table", fake.last_system_prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

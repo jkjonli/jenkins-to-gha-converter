@@ -18,8 +18,6 @@ from .llm_client import AnthropicClient, LLMClient, load_env
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "converter_system.md"
 
-# Matches a whole response wrapped in a single fenced code block, e.g.
-# ```yaml\n...\n```  or  ```\n...\n```
 _FENCED_WHOLE_RE = re.compile(
     r"^\s*```(?:[Yy][Aa]?[Mm][Ll]|yml)?\s*\n(?P<body>.*?)\n```\s*\Z",
     re.DOTALL,
@@ -38,22 +36,17 @@ def _strip_code_fences(text: str) -> str:
 
 
 def _find_first_nonblank_line(text: str) -> str:
-    for line in text.splitlines():
-        if line.strip() and not line.lstrip().startswith("#"):
-            return line
-    return ""
+    return next(
+        (line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")),
+        "",
+    )
 
 
 def _assert_workflow_shape(yaml_text: str) -> None:
     """Raise ValueError if the text does not look like a GitHub Actions workflow."""
     first_line = _find_first_nonblank_line(yaml_text)
     # `on` is a YAML 1.1 boolean, so the model may emit `'on':` or `"on":`.
-    has_valid_trigger = (
-        first_line.startswith("name:")
-        or first_line.startswith("on:")
-        or first_line.startswith("'on':")
-        or first_line.startswith('"on":')
-    )
+    has_valid_trigger = first_line.startswith(("name:", "on:", "'on':", '"on":'))
     if not has_valid_trigger:
         raise ValueError(
             "converter output does not look like a GitHub Actions workflow "
@@ -88,6 +81,7 @@ def convert(
     jenkinsfile_text: str,
     feedback: str | None = None,
     client: LLMClient | None = None,
+    system_prompt: str | None = None,
 ) -> str:
     """Convert Jenkinsfile text to a GitHub Actions workflow YAML string.
 
@@ -95,6 +89,10 @@ def convert(
         jenkinsfile_text: Raw Jenkinsfile source.
         feedback: Optional reviewer feedback to incorporate on re-runs.
         client: LLM backend. Defaults to ``AnthropicClient()``.
+        system_prompt: Optional system prompt override. When omitted, the
+            packaged ``prompts/converter_system.md`` is loaded from disk.
+            Injecting an explicit string lets callers (and tests) avoid
+            filesystem coupling.
 
     Returns:
         A YAML string (terminated by a newline). Shape-checked but not
@@ -103,7 +101,8 @@ def convert(
     if client is None:
         load_env()
         client = AnthropicClient()
-    system_prompt = load_system_prompt()
+    if system_prompt is None:
+        system_prompt = load_system_prompt()
     user_prompt = _build_user_message(jenkinsfile_text, feedback)
     raw_completion = client.complete(system_prompt=system_prompt, user_prompt=user_prompt)
     yaml_text = _strip_code_fences(raw_completion)
