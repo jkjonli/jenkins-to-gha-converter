@@ -6,9 +6,11 @@ Run with::
 """
 from __future__ import annotations
 
+import io
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import dataclass, field
 from pathlib import Path
 from unittest import mock
@@ -304,7 +306,7 @@ class SeparateClientsTests(unittest.TestCase):
 
 
 class DryRunTests(unittest.TestCase):
-    """Verify dry-run mode skips file writing and prints exchanges."""
+    """Verify --dry-run prints exchanges and skips file writes."""
 
     def setUp(self) -> None:
         env_patch = mock.patch.dict(os.environ, {}, clear=False)
@@ -319,50 +321,79 @@ class DryRunTests(unittest.TestCase):
     def output_path(self) -> Path:
         return Path(self._tmpdir) / "workflow.yml"
 
-    def test_dry_run_skips_file_writing_on_approval(self) -> None:
-        """In dry-run mode, no files should be written when approved."""
+    def _run_dry(self, fake: SequentialFakeClient, **kwargs) -> tuple[pipeline.PipelineResult, str]:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            result = pipeline.run(
+                JENKINSFILE,
+                self.output_path,
+                converter_client=fake,
+                reviewer_client=fake,
+                dry_run=True,
+                **kwargs,
+            )
+        return result, buf.getvalue()
+
+    def test_dry_run_does_not_write_workflow_file(self) -> None:
         fake = SequentialFakeClient(responses=[
             VALID_WORKFLOW,
             '{"approved": true, "issues": []}',
         ])
-        result = pipeline.run(
-            JENKINSFILE, self.output_path, converter_client=fake, reviewer_client=fake, dry_run=True
-        )
+        result, _ = self._run_dry(fake)
         self.assertTrue(result.approved)
+        self.assertEqual(result.iterations, 1)
         self.assertFalse(self.output_path.exists())
+
+    def test_dry_run_does_not_write_transcript(self) -> None:
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": true, "issues": []}',
+        ])
+        self._run_dry(fake)
         transcript = self.output_path.with_suffix(".transcript.md")
         self.assertFalse(transcript.exists())
 
-    def test_dry_run_skips_file_writing_on_exhaustion(self) -> None:
-        """In dry-run mode, no files should be written when max iterations reached."""
+    def test_dry_run_does_not_write_unapproved_on_exhaustion(self) -> None:
         fake = SequentialFakeClient(responses=[
             VALID_WORKFLOW,
             '{"approved": false, "issues": ["Fix A"]}',
         ])
-        result = pipeline.run(
-            JENKINSFILE, self.output_path, max_iterations=1, converter_client=fake, reviewer_client=fake, dry_run=True
-        )
+        result, _ = self._run_dry(fake, max_iterations=1)
         self.assertFalse(result.approved)
         self.assertFalse(self.output_path.exists())
-        unapproved = self.output_path.with_suffix(".unapproved.yml")
-        self.assertFalse(unapproved.exists())
-        transcript = self.output_path.with_suffix(".transcript.md")
-        self.assertFalse(transcript.exists())
+        self.assertFalse(self.output_path.with_suffix(".unapproved.yml").exists())
+        self.assertFalse(self.output_path.with_suffix(".transcript.md").exists())
 
-    def test_dry_run_still_runs_full_loop(self) -> None:
-        """Dry-run mode should still execute all converter/reviewer calls."""
+    def test_dry_run_prints_converter_prompt_and_response(self) -> None:
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": true, "issues": []}',
+        ])
+        _, out = self._run_dry(fake)
+        # Section markers
+        self.assertIn("CONVERTER", out)
+        self.assertIn("REVIEWER", out)
+        self.assertIn("prompt sent to LLM", out)
+        self.assertIn("response from LLM", out)
+        # The actual Jenkinsfile (in converter prompt) and response (workflow) appear
+        self.assertIn(JENKINSFILE, out)
+        self.assertIn("name: CI", out)
+        # The reviewer's JSON response appears
+        self.assertIn('"approved": true', out)
+
+    def test_dry_run_prints_each_iteration(self) -> None:
         fake = SequentialFakeClient(responses=[
             VALID_WORKFLOW,
             '{"approved": false, "issues": ["Fix A"]}',
             VALID_WORKFLOW_V2,
             '{"approved": true, "issues": []}',
         ])
-        result = pipeline.run(
-            JENKINSFILE, self.output_path, converter_client=fake, reviewer_client=fake, dry_run=True
-        )
-        self.assertTrue(result.approved)
-        self.assertEqual(result.iterations, 2)
-        self.assertEqual(len(fake.calls), 4)  # 2 converter + 2 reviewer calls
+        _, out = self._run_dry(fake)
+        self.assertIn("[iteration 1/3]", out)
+        self.assertIn("[iteration 2/3]", out)
+        # Both converter responses present
+        self.assertIn("- run: make", out)
+        self.assertIn("name: Build", out)
 
 
 if __name__ == "__main__":

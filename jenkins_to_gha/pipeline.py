@@ -107,7 +107,9 @@ def run(
         reviewer_client: LLM backend for the reviewer. Defaults to
             ``AnthropicClient()``. Use a different model for adversarial
             review (e.g. ``AnthropicClient(model="claude-haiku-4-5-20251001")``).
-        dry_run: If True, print exchanges to console and skip file writing.
+        dry_run: When True, print every prompt sent to the LLM and every
+            response received to stdout, but do NOT write the workflow,
+            unapproved, or transcript files. Intended for live demos.
 
     Returns:
         A ``PipelineResult`` with the final workflow, verdict, and iteration count.
@@ -135,6 +137,8 @@ def run(
             client=conv_recorder,
             previous_workflow=previous_workflow,
         )
+        if dry_run:
+            _print_exchange(exchanges[-1], iteration, max_iterations)
 
         print(f"[iteration {iteration}/{max_iterations}] Linting...", file=sys.stderr)
         lint_output = run_actionlint(workflow)
@@ -145,12 +149,12 @@ def run(
 
         print(f"[iteration {iteration}/{max_iterations}] Reviewing...", file=sys.stderr)
         result = review(jenkinsfile_text, workflow, client=rev_recorder, lint_output=lint_output)
+        if dry_run:
+            _print_exchange(exchanges[-1], iteration, max_iterations)
 
         if result.approved:
             print(f"[iteration {iteration}/{max_iterations}] Approved.", file=sys.stderr)
-            if dry_run:
-                _print_exchanges(exchanges)
-            else:
+            if not dry_run:
                 _write_output(workflow, output_path)
                 _write_transcript(exchanges, output_path)
             return PipelineResult(
@@ -169,23 +173,24 @@ def run(
 
     # Exhausted iterations — write with .unapproved extension and warning header.
     unapproved_path = _unapproved_path(output_path)
-    tagged_workflow = (
-        "# FAILED REVIEW — not approved after "
-        f"{max_iterations} iteration(s). Do not use without manual review.\n"
-        + workflow
-    )
     if dry_run:
         print(
-            f"[iteration {max_iterations}/{max_iterations}] Max iterations reached (dry run).",
+            f"[iteration {max_iterations}/{max_iterations}] Max iterations reached "
+            f"(dry-run: not writing {unapproved_path}).",
             file=sys.stderr,
         )
-        _print_exchanges(exchanges)
     else:
         print(
             f"[iteration {max_iterations}/{max_iterations}] Max iterations reached, "
             f"writing unapproved workflow to {unapproved_path}",
             file=sys.stderr,
         )
+    tagged_workflow = (
+        "# FAILED REVIEW — not approved after "
+        f"{max_iterations} iteration(s). Do not use without manual review.\n"
+        + workflow
+    )
+    if not dry_run:
         _write_output(tagged_workflow, unapproved_path)
         _write_transcript(exchanges, output_path)
     return PipelineResult(
@@ -194,6 +199,20 @@ def run(
         iterations=max_iterations,
         final_review=result,
     )
+
+
+def _print_exchange(ex: _Exchange, iteration: int, max_iterations: int) -> None:
+    """Pretty-print a single LLM exchange to stdout for --dry-run demos."""
+    role = ex.role.upper()
+    header = f"=== [iteration {iteration}/{max_iterations}] {role} ==="
+    sep = "-" * len(header)
+    print(header)
+    print(f"{sep}\n--- prompt sent to LLM ---\n{sep}")
+    print(ex.user_prompt)
+    print(f"{sep}\n--- response from LLM ---\n{sep}")
+    print(ex.response)
+    print(sep)
+    print()
 
 
 def _unapproved_path(output_path: Path | str) -> Path:
@@ -261,44 +280,6 @@ def _write_transcript(exchanges: list[_Exchange], output_path: Path | str) -> No
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def _print_exchanges(exchanges: list[_Exchange]) -> None:
-    """Print all converter/reviewer exchanges to console for dry-run mode."""
-    print("\n" + "=" * 80, file=sys.stderr)
-    print("DRY RUN EXCHANGES", file=sys.stderr)
-    print("=" * 80 + "\n", file=sys.stderr)
-
-    iteration = 0
-    for ex in exchanges:
-        if ex.role == "converter":
-            iteration += 1
-            print(f"## Iteration {iteration}", file=sys.stderr)
-            print("-" * 80, file=sys.stderr)
-
-        if ex.role == "converter":
-            print("\n### Converter prompt", file=sys.stderr)
-            print("-" * 40, file=sys.stderr)
-            print(ex.user_prompt, file=sys.stderr)
-            print("\n### Converter response", file=sys.stderr)
-            print("-" * 40, file=sys.stderr)
-            print("```yaml", file=sys.stderr)
-            print(ex.response.rstrip("\n"), file=sys.stderr)
-            print("```", file=sys.stderr)
-        else:
-            print("\n### Reviewer prompt", file=sys.stderr)
-            print("-" * 40, file=sys.stderr)
-            print(ex.user_prompt, file=sys.stderr)
-            print("\n### Reviewer response", file=sys.stderr)
-            print("-" * 40, file=sys.stderr)
-            print("```json", file=sys.stderr)
-            print(ex.response.strip(), file=sys.stderr)
-            print("```", file=sys.stderr)
-            print("---", file=sys.stderr)
-
-    print("\n" + "=" * 80, file=sys.stderr)
-    print("END DRY RUN", file=sys.stderr)
-    print("=" * 80 + "\n", file=sys.stderr)
-
-
 if __name__ == "__main__":
     import argparse
 
@@ -326,7 +307,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Run the loop and print exchanges to console without writing files",
+        help=(
+            "Print every LLM prompt and response to stdout but do NOT write "
+            "the workflow, unapproved, or transcript files. For live demos."
+        ),
     )
     args = parser.parse_args()
 
@@ -365,28 +349,30 @@ if __name__ == "__main__":
         raise  # Unexpected errors still get a full traceback.
 
     transcript = _transcript_path(args.output)
-    if args.dry_run:
-        if result.approved:
-            print(f"Approved after {result.iterations} iteration(s). (dry run - no files written)")
-        else:
+    if result.approved:
+        if args.dry_run:
             print(
-                f"Not approved after {result.iterations} iteration(s). (dry run - no files written)",
-                file=sys.stderr,
+                f"Approved after {result.iterations} iteration(s). "
+                f"[dry-run: no files written]"
             )
-            print("Remaining feedback:", file=sys.stderr)
-            print(result.final_review.feedback, file=sys.stderr)
-            raise SystemExit(1)
-    elif result.approved:
-        print(f"Approved after {result.iterations} iteration(s). Written to {args.output}")
-        print(f"Transcript: {transcript}")
+        else:
+            print(f"Approved after {result.iterations} iteration(s). Written to {args.output}")
+            print(f"Transcript: {transcript}")
     else:
         unapproved = _unapproved_path(args.output)
-        print(
-            f"Not approved after {result.iterations} iteration(s). "
-            f"Unapproved workflow written to {unapproved}",
-            file=sys.stderr,
-        )
-        print(f"Transcript: {transcript}", file=sys.stderr)
+        if args.dry_run:
+            print(
+                f"Not approved after {result.iterations} iteration(s). "
+                f"[dry-run: no files written]",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"Not approved after {result.iterations} iteration(s). "
+                f"Unapproved workflow written to {unapproved}",
+                file=sys.stderr,
+            )
+            print(f"Transcript: {transcript}", file=sys.stderr)
         print("Remaining feedback:", file=sys.stderr)
         print(result.final_review.feedback, file=sys.stderr)
         raise SystemExit(1)
