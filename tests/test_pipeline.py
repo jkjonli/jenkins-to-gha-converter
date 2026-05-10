@@ -303,5 +303,67 @@ class SeparateClientsTests(unittest.TestCase):
         self.assertIn("name: CI", reviewer_fake.calls[0][1])
 
 
+class DryRunTests(unittest.TestCase):
+    """Verify dry-run mode skips file writing and prints exchanges."""
+
+    def setUp(self) -> None:
+        env_patch = mock.patch.dict(os.environ, {}, clear=False)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        self._tmpdir = tempfile.mkdtemp()
+        lint_patch = mock.patch.object(pipeline, "run_actionlint", return_value=None)
+        lint_patch.start()
+        self.addCleanup(lint_patch.stop)
+
+    @property
+    def output_path(self) -> Path:
+        return Path(self._tmpdir) / "workflow.yml"
+
+    def test_dry_run_skips_file_writing_on_approval(self) -> None:
+        """In dry-run mode, no files should be written when approved."""
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": true, "issues": []}',
+        ])
+        result = pipeline.run(
+            JENKINSFILE, self.output_path, converter_client=fake, reviewer_client=fake, dry_run=True
+        )
+        self.assertTrue(result.approved)
+        self.assertFalse(self.output_path.exists())
+        transcript = self.output_path.with_suffix(".transcript.md")
+        self.assertFalse(transcript.exists())
+
+    def test_dry_run_skips_file_writing_on_exhaustion(self) -> None:
+        """In dry-run mode, no files should be written when max iterations reached."""
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": false, "issues": ["Fix A"]}',
+        ])
+        result = pipeline.run(
+            JENKINSFILE, self.output_path, max_iterations=1, converter_client=fake, reviewer_client=fake, dry_run=True
+        )
+        self.assertFalse(result.approved)
+        self.assertFalse(self.output_path.exists())
+        unapproved = self.output_path.with_suffix(".unapproved.yml")
+        self.assertFalse(unapproved.exists())
+        transcript = self.output_path.with_suffix(".transcript.md")
+        self.assertFalse(transcript.exists())
+
+    def test_dry_run_still_runs_full_loop(self) -> None:
+        """Dry-run mode should still execute all converter/reviewer calls."""
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": false, "issues": ["Fix A"]}',
+            VALID_WORKFLOW_V2,
+            '{"approved": true, "issues": []}',
+        ])
+        result = pipeline.run(
+            JENKINSFILE, self.output_path, converter_client=fake, reviewer_client=fake, dry_run=True
+        )
+        self.assertTrue(result.approved)
+        self.assertEqual(result.iterations, 2)
+        self.assertEqual(len(fake.calls), 4)  # 2 converter + 2 reviewer calls
+
+
 if __name__ == "__main__":
     unittest.main()
