@@ -104,7 +104,7 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("name: CI", second_converter_call[1])
 
     def test_exhausts_max_iterations(self) -> None:
-        """Never approved — writes to .unapproved path with warning header."""
+        """Never approved — writes the latest workflow to output_path."""
         fake = SequentialFakeClient(responses=[
             VALID_WORKFLOW,                             # converter (1)
             '{"approved": false, "issues": ["Fix A"]}',              # reviewer (1)
@@ -117,14 +117,11 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(result.approved)
         self.assertEqual(result.iterations, 2)
         self.assertIn("- Fix B", result.final_review.feedback)
-        # Must NOT write to the approved output path
-        self.assertFalse(self.output_path.exists())
-        # Must write to .unapproved path with warning header
-        unapproved = self.output_path.with_suffix(".unapproved.yml")
-        self.assertTrue(unapproved.exists())
-        content = unapproved.read_text()
-        self.assertTrue(content.startswith("# FAILED REVIEW"))
-        self.assertIn("name: CI", content)
+        # Spec only requires "write the final workflow to disk" — we honour that
+        # regardless of approval. Approval status is reported via PipelineResult.
+        self.assertTrue(self.output_path.exists())
+        content = self.output_path.read_text()
+        self.assertEqual(content, VALID_WORKFLOW)
 
     def test_single_iteration_cap(self) -> None:
         """max_iterations=1 means one convert+review, no retry."""
@@ -301,7 +298,7 @@ class DryRunTests(unittest.TestCase):
         transcript = self.output_path.with_suffix(".transcript.md")
         self.assertFalse(transcript.exists())
 
-    def test_dry_run_does_not_write_unapproved_on_exhaustion(self) -> None:
+    def test_dry_run_writes_nothing_on_exhaustion(self) -> None:
         fake = SequentialFakeClient(responses=[
             VALID_WORKFLOW,
             '{"approved": false, "issues": ["Fix A"]}',
@@ -309,7 +306,6 @@ class DryRunTests(unittest.TestCase):
         result, _ = self._run_dry(fake, max_iterations=1)
         self.assertFalse(result.approved)
         self.assertFalse(self.output_path.exists())
-        self.assertFalse(self.output_path.with_suffix(".unapproved.yml").exists())
         self.assertFalse(self.output_path.with_suffix(".transcript.md").exists())
 
     def test_dry_run_prints_converter_prompt_and_response(self) -> None:

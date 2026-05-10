@@ -8,7 +8,7 @@ Public API::
 CLI::
 
     python -m jenkins_to_gha.pipeline <Jenkinsfile> <output.yml> [--max-iterations N]
-        [--converter-model MODEL] [--reviewer-model MODEL]
+        [--model MODEL] [--dry-run]
 """
 from __future__ import annotations
 
@@ -91,8 +91,8 @@ def run(
             ``AnthropicClient()``. Use a different model for adversarial
             review (e.g. ``AnthropicClient(model="claude-haiku-4-5-20251001")``).
         dry_run: When True, print every prompt sent to the LLM and every
-            response received to stdout, but do NOT write the workflow,
-            unapproved, or transcript files. Intended for live demos.
+            response received to stdout, but do NOT write the workflow
+            or transcript files. Intended for live demos.
 
     Returns:
         A ``PipelineResult`` with the final workflow, verdict, and iteration count.
@@ -147,30 +147,18 @@ def run(
         feedback = result.feedback
         previous_workflow = workflow
 
-    # Exhausted iterations — write with .unapproved extension and warning header.
-    unapproved_path = _unapproved_path(output_path)
-    if dry_run:
-        print(
-            f"[iteration {max_iterations}/{max_iterations}] Max iterations reached "
-            f"(dry-run: not writing {unapproved_path}).",
-            file=sys.stderr,
-        )
-    else:
-        print(
-            f"[iteration {max_iterations}/{max_iterations}] Max iterations reached, "
-            f"writing unapproved workflow to {unapproved_path}",
-            file=sys.stderr,
-        )
-    tagged_workflow = (
-        "# FAILED REVIEW — not approved after "
-        f"{max_iterations} iteration(s). Do not use without manual review.\n"
-        + workflow
+    # Exhausted iterations — still write the latest workflow so the user has
+    # something to inspect. Approval status is reported via PipelineResult.
+    print(
+        f"[iteration {max_iterations}/{max_iterations}] Max iterations reached "
+        f"without approval.",
+        file=sys.stderr,
     )
     if not dry_run:
-        _write_output(tagged_workflow, unapproved_path)
+        _write_output(workflow, output_path)
         _write_transcript(exchanges, output_path)
     return PipelineResult(
-        workflow=tagged_workflow,
+        workflow=workflow,
         approved=False,
         iterations=max_iterations,
         final_review=result,
@@ -200,15 +188,6 @@ def _print_exchange(ex: _Exchange, iteration: int, max_iterations: int) -> None:
     print(ex.response)
     print(sep)
     print()
-
-
-def _unapproved_path(output_path: Path | str) -> Path:
-    """Derive the unapproved output path.
-
-    ``output/complex.yml`` -> ``output/complex.unapproved.yml``
-    """
-    p = Path(output_path)
-    return p.with_suffix(".unapproved" + p.suffix)
 
 
 def _write_output(workflow: str, output_path: Path | str) -> None:
@@ -282,21 +261,16 @@ if __name__ == "__main__":
         help="Maximum converter-reviewer iterations (default: 3)",
     )
     parser.add_argument(
-        "--converter-model",
+        "--model",
         default=AnthropicClient.DEFAULT_MODEL,
-        help=f"Model for the converter (default: {AnthropicClient.DEFAULT_MODEL})",
-    )
-    parser.add_argument(
-        "--reviewer-model",
-        default=AnthropicClient.DEFAULT_MODEL,
-        help=f"Model for the reviewer (default: {AnthropicClient.DEFAULT_MODEL})",
+        help=f"Model used for both converter and reviewer (default: {AnthropicClient.DEFAULT_MODEL})",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help=(
             "Print every LLM prompt and response to stdout but do NOT write "
-            "the workflow, unapproved, or transcript files. For live demos."
+            "the workflow or transcript files. For live demos."
         ),
     )
     args = parser.parse_args()
@@ -313,8 +287,8 @@ if __name__ == "__main__":
             jenkinsfile_text,
             args.output,
             max_iterations=args.max_iterations,
-            converter_client=AnthropicClient(model=args.converter_model),
-            reviewer_client=AnthropicClient(model=args.reviewer_model),
+            converter_client=AnthropicClient(model=args.model),
+            reviewer_client=AnthropicClient(model=args.model),
             dry_run=args.dry_run,
         )
     except Exception as exc:
@@ -346,7 +320,6 @@ if __name__ == "__main__":
             print(f"Approved after {result.iterations} iteration(s). Written to {args.output}")
             print(f"Transcript: {transcript}")
     else:
-        unapproved = _unapproved_path(args.output)
         if args.dry_run:
             print(
                 f"Not approved after {result.iterations} iteration(s). "
@@ -356,7 +329,7 @@ if __name__ == "__main__":
         else:
             print(
                 f"Not approved after {result.iterations} iteration(s). "
-                f"Unapproved workflow written to {unapproved}",
+                f"Latest workflow written to {args.output}",
                 file=sys.stderr,
             )
             print(f"Transcript: {transcript}", file=sys.stderr)
