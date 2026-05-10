@@ -1,0 +1,82 @@
+# FAILED REVIEW — not approved after 3 iteration(s). Do not use without manual review.
+name: CI
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+env:
+  APP_ENV: ci
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: gradle:8.7.0-jdk17-alpine
+      options: --user root
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Prepare Tools
+        run: |
+          apk add --no-cache bash git jq
+          jq --version
+      - name: Build
+        run: ./gradlew --no-daemon clean build
+      - name: Archive Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts
+          path: build/libs/*.jar
+      - name: Persist workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace
+          path: .
+          include-hidden-files: true
+  unit-tests:
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: gradle:8.7.0-jdk17-alpine
+      options: --user root
+    steps:
+      - name: Restore workspace
+        uses: actions/download-artifact@v4
+        with:
+          name: workspace
+          path: .
+      - name: Unit Tests
+        run: ./gradlew --no-daemon test
+      - name: Publish JUnit results
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Unit Tests
+          reporter: java-junit
+          path: build/test-results/test/*.xml
+  lint:
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: gradle:8.7.0-jdk17-alpine
+      options: --user root
+    steps:
+      - name: Restore workspace
+        uses: actions/download-artifact@v4
+        with:
+          name: workspace
+          path: .
+      - name: Lint
+        run: ./gradlew --no-daemon check
+  publish-artifacts:
+    needs: [ unit-tests, lint ]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    container:
+      image: gradle:8.7.0-jdk17-alpine
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish Artifacts
+        run: echo "Publishing artifacts (placeholder)"
