@@ -87,6 +87,33 @@ class ParseVerdictTests(unittest.TestCase):
         result = reviewer._parse_verdict(raw)
         self.assertEqual(result.feedback, "- Issue A\n- Issue B")
 
+    def test_null_issues(self) -> None:
+        result = reviewer._parse_verdict('{"approved": true, "issues": null}')
+        self.assertTrue(result.approved)
+        self.assertEqual(result.feedback, "")
+
+    def test_missing_issues_key(self) -> None:
+        result = reviewer._parse_verdict('{"approved": false}')
+        self.assertFalse(result.approved)
+        self.assertEqual(result.feedback, "")
+
+    def test_missing_approved_key(self) -> None:
+        result = reviewer._parse_verdict('{"issues": ["Fix X"]}')
+        self.assertFalse(result.approved)
+        self.assertIn("Fix X", result.feedback)
+
+    def test_non_string_issues(self) -> None:
+        result = reviewer._parse_verdict('{"approved": false, "issues": [42, null, "Fix Y"]}')
+        self.assertFalse(result.approved)
+        self.assertIn("42", result.feedback)
+        self.assertIn("Fix Y", result.feedback)
+        self.assertNotIn("None", result.feedback)
+
+    def test_empty_json_object(self) -> None:
+        result = reviewer._parse_verdict('{}')
+        self.assertFalse(result.approved)
+        self.assertEqual(result.feedback, "")
+
 
 class ReviewTests(unittest.TestCase):
     def setUp(self) -> None:

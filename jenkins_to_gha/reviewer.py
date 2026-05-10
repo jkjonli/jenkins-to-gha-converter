@@ -54,7 +54,8 @@ def _parse_verdict(response: str) -> ReviewResult:
         return ReviewResult(approved=False, feedback=text)
 
     approved = bool(data.get("approved", False))
-    issues: list[str] = data.get("issues", [])
+    raw_issues = data.get("issues") or []
+    issues = [str(i) for i in raw_issues if i is not None]
     feedback = "\n".join(f"- {issue}" for issue in issues) if issues else ""
     return ReviewResult(approved=approved, feedback=feedback)
 
