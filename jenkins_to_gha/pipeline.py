@@ -8,12 +8,12 @@ Public API::
 CLI::
 
     python -m jenkins_to_gha.pipeline <Jenkinsfile> <output.yml> [--max-iterations N]
-        [--model MODEL] [--dry-run]
+        [--model MODEL]
 """
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from .converter import convert
@@ -23,14 +23,11 @@ from .reviewer import ReviewResult, review
 
 @dataclass
 class _Exchange:
-    """A single LLM call: prompts sent, response received, and client metadata."""
+    """A single LLM call: role, prompt sent, response received."""
 
     role: str  # "converter" or "reviewer"
     user_prompt: str
     response: str
-    system_prompt: str = ""
-    model: str | None = None
-    max_tokens: int | None = None
 
 
 @dataclass
@@ -44,12 +41,7 @@ class PipelineResult:
 
 
 class _RecordingClient:
-    """Wraps an LLMClient to record every exchange for the transcript.
-
-    Captures the inner client's ``model`` and ``max_tokens`` attributes
-    when present (``AnthropicClient`` exposes both); test fakes that lack
-    them simply record ``None``.
-    """
+    """Wraps an LLMClient to record every exchange for the transcript."""
 
     def __init__(self, inner: LLMClient, role: str, exchanges: list[_Exchange]) -> None:
         self._inner = inner
@@ -59,14 +51,7 @@ class _RecordingClient:
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         response = self._inner.complete(system_prompt, user_prompt)
         self._exchanges.append(
-            _Exchange(
-                role=self._role,
-                user_prompt=user_prompt,
-                response=response,
-                system_prompt=system_prompt,
-                model=getattr(self._inner, "model", None),
-                max_tokens=getattr(self._inner, "max_tokens", None),
-            )
+            _Exchange(role=self._role, user_prompt=user_prompt, response=response)
         )
         return response
 
@@ -77,7 +62,6 @@ def run(
     max_iterations: int = 3,
     converter_client: LLMClient | None = None,
     reviewer_client: LLMClient | None = None,
-    dry_run: bool = False,
 ) -> PipelineResult:
     """Run the converter-reviewer loop and write the final workflow to disk.
 
@@ -90,9 +74,6 @@ def run(
         reviewer_client: LLM backend for the reviewer. Defaults to
             ``AnthropicClient()``. Use a different model for adversarial
             review (e.g. ``AnthropicClient(model="claude-haiku-4-5-20251001")``).
-        dry_run: When True, print every prompt sent to the LLM and every
-            response received to stdout, but do NOT write the workflow
-            or transcript files. Intended for live demos.
 
     Returns:
         A ``PipelineResult`` with the final workflow, verdict, and iteration count.
@@ -120,19 +101,14 @@ def run(
             client=conv_recorder,
             previous_workflow=previous_workflow,
         )
-        if dry_run:
-            _print_exchange(exchanges[-1], iteration, max_iterations)
 
         print(f"[iteration {iteration}/{max_iterations}] Reviewing...", file=sys.stderr)
         result = review(jenkinsfile_text, workflow, client=rev_recorder)
-        if dry_run:
-            _print_exchange(exchanges[-1], iteration, max_iterations)
 
         if result.approved:
             print(f"[iteration {iteration}/{max_iterations}] Approved.", file=sys.stderr)
-            if not dry_run:
-                _write_output(workflow, output_path)
-                _write_transcript(exchanges, output_path)
+            _write_output(workflow, output_path)
+            _write_transcript(exchanges, output_path)
             return PipelineResult(
                 workflow=workflow,
                 approved=True,
@@ -154,40 +130,14 @@ def run(
         f"without approval.",
         file=sys.stderr,
     )
-    if not dry_run:
-        _write_output(workflow, output_path)
-        _write_transcript(exchanges, output_path)
+    _write_output(workflow, output_path)
+    _write_transcript(exchanges, output_path)
     return PipelineResult(
         workflow=workflow,
         approved=False,
         iterations=max_iterations,
         final_review=result,
     )
-
-
-def _print_exchange(ex: _Exchange, iteration: int, max_iterations: int) -> None:
-    """Pretty-print a single LLM exchange to stdout for --dry-run demos.
-
-    Includes client metadata (model, max_tokens), the system prompt, the
-    user prompt, and the raw response so a viewer can see *everything*
-    sent to and received from the LLM.
-    """
-    role = ex.role.upper()
-    header = f"=== [iteration {iteration}/{max_iterations}] {role} ==="
-    sep = "-" * len(header)
-    model = ex.model if ex.model is not None else "<unknown>"
-    max_tokens = ex.max_tokens if ex.max_tokens is not None else "<unknown>"
-    print(header)
-    print(f"model:      {model}")
-    print(f"max_tokens: {max_tokens}")
-    print(f"{sep}\n--- system prompt ---\n{sep}")
-    print(ex.system_prompt)
-    print(f"{sep}\n--- user prompt ---\n{sep}")
-    print(ex.user_prompt)
-    print(f"{sep}\n--- response from LLM ---\n{sep}")
-    print(ex.response)
-    print(sep)
-    print()
 
 
 def _write_output(workflow: str, output_path: Path | str) -> None:
@@ -265,14 +215,6 @@ if __name__ == "__main__":
         default=AnthropicClient.DEFAULT_MODEL,
         help=f"Model used for both converter and reviewer (default: {AnthropicClient.DEFAULT_MODEL})",
     )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help=(
-            "Print every LLM prompt and response to stdout but do NOT write "
-            "the workflow or transcript files. For live demos."
-        ),
-    )
     args = parser.parse_args()
 
     load_env()
@@ -289,7 +231,6 @@ if __name__ == "__main__":
             max_iterations=args.max_iterations,
             converter_client=AnthropicClient(model=args.model),
             reviewer_client=AnthropicClient(model=args.model),
-            dry_run=args.dry_run,
         )
     except Exception as exc:
         # Lazy import to avoid hard dependency when not using CLI.
@@ -311,28 +252,15 @@ if __name__ == "__main__":
 
     transcript = _transcript_path(args.output)
     if result.approved:
-        if args.dry_run:
-            print(
-                f"Approved after {result.iterations} iteration(s). "
-                f"[dry-run: no files written]"
-            )
-        else:
-            print(f"Approved after {result.iterations} iteration(s). Written to {args.output}")
-            print(f"Transcript: {transcript}")
+        print(f"Approved after {result.iterations} iteration(s). Written to {args.output}")
+        print(f"Transcript: {transcript}")
     else:
-        if args.dry_run:
-            print(
-                f"Not approved after {result.iterations} iteration(s). "
-                f"[dry-run: no files written]",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"Not approved after {result.iterations} iteration(s). "
-                f"Latest workflow written to {args.output}",
-                file=sys.stderr,
-            )
-            print(f"Transcript: {transcript}", file=sys.stderr)
+        print(
+            f"Not approved after {result.iterations} iteration(s). "
+            f"Latest workflow written to {args.output}",
+            file=sys.stderr,
+        )
+        print(f"Transcript: {transcript}", file=sys.stderr)
         print("Remaining feedback:", file=sys.stderr)
         print(result.final_review.feedback, file=sys.stderr)
         raise SystemExit(1)
