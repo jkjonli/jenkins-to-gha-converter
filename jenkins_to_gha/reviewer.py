@@ -11,7 +11,6 @@ and parses the response into a structured verdict.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,36 +27,74 @@ class ReviewResult:
     feedback: str
 
 
-_JSON_BLOCK_RE = re.compile(
-    r"```(?:json)?\s*\n(?P<body>.*?)\n```",
-    re.DOTALL,
-)
+def _find_json_objects(text: str) -> list[str]:
+    """Return every top-level ``{...}`` substring in ``text``, in order.
+
+    Scans with a brace-depth counter that respects JSON string literals
+    (so braces inside quoted strings do not confuse the scanner). This
+    is more robust than a regex against the kinds of responses Claude
+    actually emits: doubled Markdown fences (``` ```json\\n```json\\n{...} ```),
+    multi-verdict chain-of-thought, and prose interleaved with JSON.
+    """
+    results: list[str] = []
+    depth = 0
+    start = -1
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    results.append(text[start : i + 1])
+                    start = -1
+    return results
 
 
 def _parse_verdict(response: str) -> ReviewResult:
     """Parse the LLM's JSON response into a ReviewResult.
 
-    Accepts raw JSON or JSON wrapped in Markdown fences.
+    Tolerates: bare JSON, single Markdown fence, doubled Markdown fences
+    (observed with Opus 4-6), and chain-of-thought responses where the
+    model emits multiple verdicts before settling on a final answer.
+    The LAST parseable JSON object wins — that is the model's settled
+    verdict, not its first instinct.
     """
     text = response.strip()
 
-    # Strip optional Markdown fences.
-    fence_match = _JSON_BLOCK_RE.search(text)
-    if fence_match:
-        text = fence_match.group("body").strip()
+    # Walk every candidate JSON object from last to first; the last
+    # parseable dict is the model's final answer.
+    for candidate in reversed(_find_json_objects(text)):
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        approved = bool(data.get("approved", False))
+        raw_issues = data.get("issues") or []
+        issues = [str(i) for i in raw_issues if i is not None]
+        feedback = "\n".join(f"- {issue}" for issue in issues) if issues else ""
+        return ReviewResult(approved=approved, feedback=feedback)
 
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        # Model didn't return valid JSON — treat the whole response as
-        # unapproved feedback so the loop can still function.
-        return ReviewResult(approved=False, feedback=text)
-
-    approved = bool(data.get("approved", False))
-    raw_issues = data.get("issues") or []
-    issues = [str(i) for i in raw_issues if i is not None]
-    feedback = "\n".join(f"- {issue}" for issue in issues) if issues else ""
-    return ReviewResult(approved=approved, feedback=feedback)
+    # No parseable JSON object found — treat the whole response as
+    # unapproved feedback so the loop can still function.
+    return ReviewResult(approved=False, feedback=text)
 
 
 def _build_user_message(jenkinsfile_text: str, workflow_yaml: str) -> str:

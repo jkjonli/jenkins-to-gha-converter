@@ -114,6 +114,50 @@ class ParseVerdictTests(unittest.TestCase):
         self.assertFalse(result.approved)
         self.assertEqual(result.feedback, "")
 
+    def test_doubled_fence_opus_pattern(self) -> None:
+        """Opus 4-6 was observed wrapping its JSON in two fences:
+        ``` ```json\\n```json\\n{...}\\n```\\n``` ```. The parser must still
+        recover the verdict instead of falling through to the JSONDecodeError
+        branch and forcing approved=False with the entire blob as feedback."""
+        raw = '```json\n```json\n{"approved": true, "issues": []}\n```\n```'
+        result = reviewer._parse_verdict(raw)
+        self.assertTrue(result.approved)
+        self.assertEqual(result.feedback, "")
+
+    def test_chain_of_thought_uses_final_verdict(self) -> None:
+        """When the model emits multiple verdicts in one response
+        (chain-of-thought self-correction), the parser must honour the
+        LAST one — the model's settled answer — not the first."""
+        raw = (
+            '```json\n{"approved": false, "issues": ["initial concern"]}\n```\n'
+            "Wait, let me reconsider. The checklist actually permits this.\n"
+            '```json\n{"approved": true, "issues": []}\n```\n'
+        )
+        result = reviewer._parse_verdict(raw)
+        self.assertTrue(result.approved)
+        self.assertEqual(result.feedback, "")
+
+    def test_chain_of_thought_picks_last_rejection(self) -> None:
+        """Mirror of the previous test: if the model flips from approve
+        to reject, the rejection must win."""
+        raw = (
+            '```json\n{"approved": true, "issues": []}\n```\n'
+            "Actually no, I missed something.\n"
+            '```json\n{"approved": false, "issues": ["Missing checkout"]}\n```\n'
+        )
+        result = reviewer._parse_verdict(raw)
+        self.assertFalse(result.approved)
+        self.assertIn("Missing checkout", result.feedback)
+
+    def test_braces_inside_issue_strings(self) -> None:
+        """Issue strings can legitimately contain '{' and '}' (e.g.
+        GitHub expression syntax). The brace-balanced scanner must
+        respect JSON string literals."""
+        raw = '{"approved": false, "issues": ["Use ${{ secrets.X }} not {placeholder}"]}'
+        result = reviewer._parse_verdict(raw)
+        self.assertFalse(result.approved)
+        self.assertIn("${{ secrets.X }}", result.feedback)
+
 
 class ReviewTests(unittest.TestCase):
     def setUp(self) -> None:
