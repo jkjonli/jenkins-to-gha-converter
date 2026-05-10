@@ -13,77 +13,77 @@ jobs:
       image: gradle:8.7.0-jdk17-alpine
       options: --user root
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Prepare Tools
         run: |
           apk add --no-cache bash git jq
           jq --version
       - name: Build
         run: ./gradlew --no-daemon clean build
-      - name: Upload build output
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: build-libs
-          path: build/libs/*.jar
+          name: build-output
+          path: build/
   unit-tests:
-    needs: build
     runs-on: ubuntu-latest
     container:
       image: gradle:8.7.0-jdk17-alpine
       options: --user root
+    needs: build
     steps:
       - uses: actions/checkout@v4
       - name: Prepare Tools
-        run: |
-          apk add --no-cache bash git jq
-          jq --version
+        run: apk add --no-cache bash git jq
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: build/
       - name: Unit Tests
         run: ./gradlew --no-daemon test
-      - name: Publish JUnit results
+      - uses: dorny/test-reporter@v1
         if: always()
-        uses: dorny/test-reporter@v1
         with:
-          name: Unit Tests
-          reporter: java-junit
+          name: Unit Test Results
           path: build/test-results/test/*.xml
+          reporter: java-junit
   lint:
-    needs: build
     runs-on: ubuntu-latest
     container:
       image: gradle:8.7.0-jdk17-alpine
       options: --user root
+    needs: build
     steps:
       - uses: actions/checkout@v4
       - name: Prepare Tools
-        run: |
-          apk add --no-cache bash git jq
-          jq --version
+        run: apk add --no-cache bash git jq
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: build/
       - name: Lint
         run: ./gradlew --no-daemon check
   publish-artifacts:
-    needs: [ unit-tests, lint ]
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     container:
       image: gradle:8.7.0-jdk17-alpine
       options: --user root
+    needs: [ unit-tests, lint ]
+    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
       - name: Publish Artifacts
-        run: echo "Publishing artifacts (placeholder)"
-  post:
+        run: echo 'Publishing artifacts (placeholder)'
+  archive:
+    runs-on: ubuntu-latest
     needs: [ build, unit-tests, lint, publish-artifacts ]
     if: always()
-    runs-on: ubuntu-latest
     steps:
-      - name: Download build output
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: build-libs
-          path: build/libs
-      - name: Archive Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
+          name: build-output
+          path: build/
+      - uses: actions/upload-artifact@v4
         with:
           name: artifacts
           path: build/libs/*.jar

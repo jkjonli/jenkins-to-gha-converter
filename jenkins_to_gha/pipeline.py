@@ -23,9 +23,10 @@ from .reviewer import ReviewResult, review
 
 @dataclass
 class _Exchange:
-    """A single LLM call: role, prompt sent, response received."""
+    """A single LLM call: role, prompts sent, response received."""
 
     role: str  # "converter" or "reviewer"
+    system_prompt: str
     user_prompt: str
     response: str
 
@@ -51,7 +52,12 @@ class _RecordingClient:
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         response = self._inner.complete(system_prompt, user_prompt)
         self._exchanges.append(
-            _Exchange(role=self._role, user_prompt=user_prompt, response=response)
+            _Exchange(
+                role=self._role,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response=response,
+            )
         )
         return response
 
@@ -168,6 +174,10 @@ def _write_transcript(exchanges: list[_Exchange], output_path: Path | str) -> No
             lines.append("")
 
         if ex.role == "converter":
+            lines.append("### Converter system prompt")
+            lines.append("")
+            lines.append(ex.system_prompt.rstrip("\n"))
+            lines.append("")
             lines.append("### Converter prompt")
             lines.append("")
             lines.append(ex.user_prompt)
@@ -179,6 +189,10 @@ def _write_transcript(exchanges: list[_Exchange], output_path: Path | str) -> No
             lines.append("```")
             lines.append("")
         else:
+            lines.append("### Reviewer system prompt")
+            lines.append("")
+            lines.append(ex.system_prompt.rstrip("\n"))
+            lines.append("")
             lines.append("### Reviewer prompt")
             lines.append("")
             lines.append(ex.user_prompt)

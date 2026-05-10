@@ -219,6 +219,33 @@ class TranscriptTests(unittest.TestCase):
         self.assertIn('"approved": true', content)  # reviewer response
         self.assertIn(JENKINSFILE, content)  # jenkinsfile in prompts
 
+    def test_transcript_contains_both_system_prompts(self) -> None:
+        """The transcript must include the converter and reviewer system
+        prompts verbatim so a demo viewer can see exactly what each agent
+        was told."""
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": true, "issues": []}',
+        ])
+        converter_sys = "SYSTEM-CONV-MARKER You are a converter."
+        reviewer_sys = "SYSTEM-REV-MARKER You are a reviewer."
+        with mock.patch(
+            "jenkins_to_gha.converter.load_system_prompt", return_value=converter_sys
+        ), mock.patch(
+            "jenkins_to_gha.reviewer.load_system_prompt", return_value=reviewer_sys
+        ):
+            pipeline.run(
+                JENKINSFILE,
+                self.output_path,
+                converter_client=fake,
+                reviewer_client=fake,
+            )
+        content = self.transcript_path.read_text()
+        self.assertIn("### Converter system prompt", content)
+        self.assertIn("### Reviewer system prompt", content)
+        self.assertIn(converter_sys, content)
+        self.assertIn(reviewer_sys, content)
+
 
 class SeparateClientsTests(unittest.TestCase):
     """Verify converter and reviewer use independent LLM clients."""
