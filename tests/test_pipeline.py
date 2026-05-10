@@ -69,10 +69,6 @@ class PipelineTests(unittest.TestCase):
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self._tmpdir = tempfile.mkdtemp()
-        # Mock actionlint so tests don't need the binary installed.
-        lint_patch = mock.patch.object(pipeline, "run_actionlint", return_value=None)
-        lint_patch.start()
-        self.addCleanup(lint_patch.stop)
 
     @property
     def output_path(self) -> Path:
@@ -170,9 +166,6 @@ class TranscriptTests(unittest.TestCase):
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self._tmpdir = tempfile.mkdtemp()
-        lint_patch = mock.patch.object(pipeline, "run_actionlint", return_value=None)
-        lint_patch.start()
-        self.addCleanup(lint_patch.stop)
 
     @property
     def output_path(self) -> Path:
@@ -232,45 +225,6 @@ class TranscriptTests(unittest.TestCase):
         self.assertIn(JENKINSFILE, content)  # jenkinsfile in prompts
 
 
-class ActionlintTests(unittest.TestCase):
-    def setUp(self) -> None:
-        env_patch = mock.patch.dict(os.environ, {}, clear=False)
-        env_patch.start()
-        self.addCleanup(env_patch.stop)
-        self._tmpdir = tempfile.mkdtemp()
-
-    @property
-    def output_path(self) -> Path:
-        return Path(self._tmpdir) / "workflow.yml"
-
-    def test_lint_errors_passed_to_reviewer(self) -> None:
-        """When actionlint finds errors, they appear in the reviewer's user prompt."""
-        lint_error = "workflow.yml:10:5: error: unknown action"
-        fake = SequentialFakeClient(responses=[
-            VALID_WORKFLOW,
-            '{"approved": false, "issues": ["Fix lint error"]}',
-        ])
-        with mock.patch.object(
-            pipeline, "run_actionlint", return_value=lint_error
-        ):
-            pipeline.run(JENKINSFILE, self.output_path, max_iterations=1, converter_client=fake, reviewer_client=fake)
-        # The reviewer call is fake.calls[1]; its user_prompt should contain the lint output
-        reviewer_prompt = fake.calls[1][1]
-        self.assertIn("unknown action", reviewer_prompt)
-        self.assertIn("actionlint output", reviewer_prompt)
-
-    def test_clean_lint_shows_no_errors(self) -> None:
-        """When actionlint is clean, reviewer prompt says 'No errors'."""
-        fake = SequentialFakeClient(responses=[
-            VALID_WORKFLOW,
-            '{"approved": true, "issues": []}',
-        ])
-        with mock.patch.object(pipeline, "run_actionlint", return_value=None):
-            pipeline.run(JENKINSFILE, self.output_path, converter_client=fake, reviewer_client=fake)
-        reviewer_prompt = fake.calls[1][1]
-        self.assertIn("No errors", reviewer_prompt)
-
-
 class SeparateClientsTests(unittest.TestCase):
     """Verify converter and reviewer use independent LLM clients."""
 
@@ -279,9 +233,6 @@ class SeparateClientsTests(unittest.TestCase):
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self._tmpdir = tempfile.mkdtemp()
-        lint_patch = mock.patch.object(pipeline, "run_actionlint", return_value=None)
-        lint_patch.start()
-        self.addCleanup(lint_patch.stop)
 
     @property
     def output_path(self) -> Path:
@@ -313,9 +264,6 @@ class DryRunTests(unittest.TestCase):
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self._tmpdir = tempfile.mkdtemp()
-        lint_patch = mock.patch.object(pipeline, "run_actionlint", return_value=None)
-        lint_patch.start()
-        self.addCleanup(lint_patch.stop)
 
     @property
     def output_path(self) -> Path:

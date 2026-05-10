@@ -157,22 +157,5 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(fake.last_system_prompt, custom)
         self.assertNotEqual(fake.last_system_prompt, reviewer.load_system_prompt())
 
-    def test_review_includes_lint_output_when_provided(self) -> None:
-        fake = FakeClient(response='{"approved": false, "issues": ["Fix lint error"]}')
-        lint_errors = "workflow.yml:10:5: error: unknown action"
-        reviewer.review(
-            SAMPLE_JENKINSFILE, SAMPLE_WORKFLOW, client=fake, lint_output=lint_errors
-        )
-        self.assertIn("actionlint output", fake.last_user_prompt)
-        self.assertIn("unknown action", fake.last_user_prompt)
-
-    def test_review_shows_no_errors_when_lint_clean(self) -> None:
-        fake = FakeClient(response='{"approved": true, "issues": []}')
-        reviewer.review(
-            SAMPLE_JENKINSFILE, SAMPLE_WORKFLOW, client=fake, lint_output=None
-        )
-        self.assertIn("No errors", fake.last_user_prompt)
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -122,8 +122,8 @@ def convert(
             so the converter can revise it rather than regenerate from scratch.
 
     Returns:
-        A YAML string (terminated by a newline). Shape-checked but not
-        actionlint-validated (that is the reviewer's job).
+        A YAML string (terminated by a newline). Shape-checked; deeper
+        semantic validation is the reviewer's job.
     """
     if client is None:
         load_env()

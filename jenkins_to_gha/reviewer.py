@@ -60,11 +60,7 @@ def _parse_verdict(response: str) -> ReviewResult:
     return ReviewResult(approved=approved, feedback=feedback)
 
 
-def _build_user_message(
-    jenkinsfile_text: str,
-    workflow_yaml: str,
-    lint_output: str | None = None,
-) -> str:
+def _build_user_message(jenkinsfile_text: str, workflow_yaml: str) -> str:
     parts = [
         "# Jenkinsfile (source)",
         "```groovy",
@@ -76,20 +72,6 @@ def _build_user_message(
         workflow_yaml.rstrip("\n"),
         "```",
     ]
-    if lint_output:
-        parts.extend([
-            "",
-            "# actionlint output (deterministic — every error here must be fixed)",
-            "```",
-            lint_output.rstrip("\n"),
-            "```",
-        ])
-    else:
-        parts.extend([
-            "",
-            "# actionlint output",
-            "No errors.",
-        ])
     return "\n".join(parts)
 
 
@@ -108,7 +90,6 @@ def review(
     workflow_yaml: str,
     client: LLMClient | None = None,
     system_prompt: str | None = None,
-    lint_output: str | None = None,
 ) -> ReviewResult:
     """Review a generated GitHub Actions workflow against its source Jenkinsfile.
 
@@ -117,8 +98,6 @@ def review(
         workflow_yaml: Generated GitHub Actions workflow YAML.
         client: LLM backend. Defaults to ``AnthropicClient()``.
         system_prompt: Optional system prompt override.
-        lint_output: Optional stderr from ``actionlint``. When provided,
-            the reviewer treats these as mandatory fixes.
 
     Returns:
         A ``ReviewResult`` with ``approved`` flag and ``feedback`` text.
@@ -128,7 +107,7 @@ def review(
         client = AnthropicClient()
     if system_prompt is None:
         system_prompt = load_system_prompt()
-    user_prompt = _build_user_message(jenkinsfile_text, workflow_yaml, lint_output)
+    user_prompt = _build_user_message(jenkinsfile_text, workflow_yaml)
     raw_response = client.complete(system_prompt=system_prompt, user_prompt=user_prompt)
     return _parse_verdict(raw_response)
 

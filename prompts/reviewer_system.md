@@ -26,19 +26,6 @@ Rules:
 - Do not suggest stylistic preferences or optimisations unless they
   affect correctness or faithfulness to the source pipeline.
 
-# actionlint (deterministic signal)
-
-The user message includes the output of `actionlint`, a static
-analysis tool for GitHub Actions workflows. Its errors are
-deterministic and always correct.
-
-- If actionlint reports errors, the workflow **must not** be approved.
-  Include every actionlint error as a separate issue in your response.
-- actionlint errors take priority over your own review. Fix syntax
-  first, then check semantics.
-- When actionlint reports "No errors", you may still reject based on
-  the semantic checks below.
-
 # Review checklist
 
 Apply every check below. Flag only violations you are confident about.

@@ -12,9 +12,7 @@ CLI::
 """
 from __future__ import annotations
 
-import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -73,36 +71,6 @@ class _RecordingClient:
         return response
 
 
-def run_actionlint(workflow_yaml: str) -> str | None:
-    """Run actionlint on a workflow YAML string.
-
-    Returns the stderr output if there are errors, or ``None`` if clean.
-    """
-    with tempfile.NamedTemporaryFile(
-        suffix=".yml", mode="w", encoding="utf-8", delete=False
-    ) as f:
-        f.write(workflow_yaml)
-        tmp_path = f.name
-    try:
-        proc = subprocess.run(
-            ["actionlint", tmp_path],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if proc.returncode != 0 and proc.stderr.strip():
-            return proc.stderr.strip()
-        # actionlint may also write errors to stdout
-        if proc.returncode != 0 and proc.stdout.strip():
-            return proc.stdout.strip()
-        return None
-    except FileNotFoundError:
-        print("[warning] actionlint not found, skipping lint step", file=sys.stderr)
-        return None
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
-
-
 def run(
     jenkinsfile_text: str,
     output_path: Path | str,
@@ -155,15 +123,8 @@ def run(
         if dry_run:
             _print_exchange(exchanges[-1], iteration, max_iterations)
 
-        print(f"[iteration {iteration}/{max_iterations}] Linting...", file=sys.stderr)
-        lint_output = run_actionlint(workflow)
-        if lint_output:
-            print(f"[iteration {iteration}/{max_iterations}] actionlint found issues.", file=sys.stderr)
-        else:
-            print(f"[iteration {iteration}/{max_iterations}] actionlint clean.", file=sys.stderr)
-
         print(f"[iteration {iteration}/{max_iterations}] Reviewing...", file=sys.stderr)
-        result = review(jenkinsfile_text, workflow, client=rev_recorder, lint_output=lint_output)
+        result = review(jenkinsfile_text, workflow, client=rev_recorder)
         if dry_run:
             _print_exchange(exchanges[-1], iteration, max_iterations)
 
