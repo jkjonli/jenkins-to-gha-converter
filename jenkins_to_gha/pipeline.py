@@ -25,11 +25,14 @@ from .reviewer import ReviewResult, review
 
 @dataclass
 class _Exchange:
-    """A single LLM call: the prompt sent and the response received."""
+    """A single LLM call: prompts sent, response received, and client metadata."""
 
     role: str  # "converter" or "reviewer"
     user_prompt: str
     response: str
+    system_prompt: str = ""
+    model: str | None = None
+    max_tokens: int | None = None
 
 
 @dataclass
@@ -43,7 +46,12 @@ class PipelineResult:
 
 
 class _RecordingClient:
-    """Wraps an LLMClient to record every exchange for the transcript."""
+    """Wraps an LLMClient to record every exchange for the transcript.
+
+    Captures the inner client's ``model`` and ``max_tokens`` attributes
+    when present (``AnthropicClient`` exposes both); test fakes that lack
+    them simply record ``None``.
+    """
 
     def __init__(self, inner: LLMClient, role: str, exchanges: list[_Exchange]) -> None:
         self._inner = inner
@@ -53,7 +61,14 @@ class _RecordingClient:
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         response = self._inner.complete(system_prompt, user_prompt)
         self._exchanges.append(
-            _Exchange(role=self._role, user_prompt=user_prompt, response=response)
+            _Exchange(
+                role=self._role,
+                user_prompt=user_prompt,
+                response=response,
+                system_prompt=system_prompt,
+                model=getattr(self._inner, "model", None),
+                max_tokens=getattr(self._inner, "max_tokens", None),
+            )
         )
         return response
 
@@ -202,12 +217,23 @@ def run(
 
 
 def _print_exchange(ex: _Exchange, iteration: int, max_iterations: int) -> None:
-    """Pretty-print a single LLM exchange to stdout for --dry-run demos."""
+    """Pretty-print a single LLM exchange to stdout for --dry-run demos.
+
+    Includes client metadata (model, max_tokens), the system prompt, the
+    user prompt, and the raw response so a viewer can see *everything*
+    sent to and received from the LLM.
+    """
     role = ex.role.upper()
     header = f"=== [iteration {iteration}/{max_iterations}] {role} ==="
     sep = "-" * len(header)
+    model = ex.model if ex.model is not None else "<unknown>"
+    max_tokens = ex.max_tokens if ex.max_tokens is not None else "<unknown>"
     print(header)
-    print(f"{sep}\n--- prompt sent to LLM ---\n{sep}")
+    print(f"model:      {model}")
+    print(f"max_tokens: {max_tokens}")
+    print(f"{sep}\n--- system prompt ---\n{sep}")
+    print(ex.system_prompt)
+    print(f"{sep}\n--- user prompt ---\n{sep}")
     print(ex.user_prompt)
     print(f"{sep}\n--- response from LLM ---\n{sep}")
     print(ex.response)

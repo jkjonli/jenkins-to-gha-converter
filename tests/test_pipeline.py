@@ -373,13 +373,66 @@ class DryRunTests(unittest.TestCase):
         # Section markers
         self.assertIn("CONVERTER", out)
         self.assertIn("REVIEWER", out)
-        self.assertIn("prompt sent to LLM", out)
+        self.assertIn("system prompt", out)
+        self.assertIn("user prompt", out)
         self.assertIn("response from LLM", out)
-        # The actual Jenkinsfile (in converter prompt) and response (workflow) appear
+        # The actual Jenkinsfile (in converter user prompt) and response (workflow) appear
         self.assertIn(JENKINSFILE, out)
         self.assertIn("name: CI", out)
         # The reviewer's JSON response appears
         self.assertIn('"approved": true', out)
+
+    def test_dry_run_prints_system_prompts(self) -> None:
+        """Both converter and reviewer system prompts are printed verbatim."""
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": true, "issues": []}',
+        ])
+        converter_sys = "SYSTEM-CONV-MARKER You are a converter."
+        reviewer_sys = "SYSTEM-REV-MARKER You are a reviewer."
+        with mock.patch(
+            "jenkins_to_gha.converter.load_system_prompt", return_value=converter_sys
+        ), mock.patch(
+            "jenkins_to_gha.reviewer.load_system_prompt", return_value=reviewer_sys
+        ):
+            _, out = self._run_dry(fake)
+        self.assertIn(converter_sys, out)
+        self.assertIn(reviewer_sys, out)
+
+    def test_dry_run_prints_model_and_max_tokens(self) -> None:
+        """Model name and max_tokens of the underlying client are surfaced."""
+
+        @dataclass
+        class FakeWithMeta:
+            responses: list[str]
+            model: str = "fake-model-x1"
+            max_tokens: int = 1234
+            _i: int = 0
+            calls: list[tuple[str, str]] = field(default_factory=list)
+
+            def complete(self, system_prompt: str, user_prompt: str) -> str:
+                self.calls.append((system_prompt, user_prompt))
+                r = self.responses[self._i]
+                self._i += 1
+                return r
+
+        fake = FakeWithMeta(responses=[
+            VALID_WORKFLOW,
+            '{"approved": true, "issues": []}',
+        ])
+        _, out = self._run_dry(fake)
+        self.assertIn("fake-model-x1", out)
+        self.assertIn("1234", out)
+
+    def test_dry_run_handles_clients_without_model_metadata(self) -> None:
+        """Fakes lacking model/max_tokens still produce readable output."""
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": true, "issues": []}',
+        ])
+        _, out = self._run_dry(fake)
+        # Falls back to a sentinel rather than raising AttributeError
+        self.assertIn("<unknown>", out)
 
     def test_dry_run_prints_each_iteration(self) -> None:
         fake = SequentialFakeClient(responses=[
