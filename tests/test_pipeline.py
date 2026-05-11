@@ -304,13 +304,25 @@ class TranscriptTests(unittest.TestCase):
 
 
 class LessThanIdealDemoTests(unittest.TestCase):
-    """`--less-than-ideal` demo mode: iteration 1 uses a sabotaged
-    converter system prompt that produces a known recoverable flaw,
-    iteration 2 uses the normal disk prompt and (with reviewer feedback)
-    corrects it. The reviewer sees only the produced YAML, never the
-    sabotage marker."""
+    """`--less-than-ideal` demo mode: iteration 1 uses a deliberately
+    minimal converter system prompt (loaded from
+    ``prompts/converter_system_minimal.md``) that omits guidance on
+    env scope, parallelism, container blocks, pipeline-post terminal
+    jobs, artifact naming, and execution-model differences. The model
+    naturally produces multi-rule fidelity violations the reviewer can
+    catch. Iteration 2 reverts to the full v3 disk prompt and corrects
+    them based on reviewer feedback.
 
-    SABOTAGE_MARKER = "DEMO SABOTAGE"
+    A single-defect sabotage prompt was tried first and rejected: the
+    reviewer too easily hallucinated the missing element into its
+    `checked` walkthrough and approved. A multi-defect minimal prompt
+    forces the reviewer to actually look.
+    """
+
+    # Phrase that exists ONLY in the minimal prompt.
+    MINIMAL_MARKER = "Bare-minimum mapping"
+    # Phrase that exists ONLY in the full v3 prompt.
+    FULL_MARKER = "FOUR EXECUTION-MODEL DIFFERENCES"
 
     def setUp(self) -> None:
         env_patch = mock.patch.dict(os.environ, {}, clear=False)
@@ -322,7 +334,7 @@ class LessThanIdealDemoTests(unittest.TestCase):
     def output_path(self) -> Path:
         return Path(self._tmpdir) / "workflow.yml"
 
-    def test_sabotage_applied_only_on_iteration_one(self) -> None:
+    def test_minimal_prompt_used_only_on_iteration_one(self) -> None:
         fake = SequentialFakeClient(responses=[
             VALID_WORKFLOW,                                         # converter (1)
             '{"approved": false, "issues": ["Missing checkout"]}',  # reviewer (1)
@@ -341,14 +353,19 @@ class LessThanIdealDemoTests(unittest.TestCase):
         first_converter_system = fake.calls[0][0]
         second_converter_system = fake.calls[2][0]
         first_reviewer_user = fake.calls[1][1]
-        self.assertIn(self.SABOTAGE_MARKER, first_converter_system)
-        self.assertNotIn(self.SABOTAGE_MARKER, second_converter_system)
-        # The reviewer must never see the sabotage marker — it only
+        # Iteration 1: minimal prompt only.
+        self.assertIn(self.MINIMAL_MARKER, first_converter_system)
+        self.assertNotIn(self.FULL_MARKER, first_converter_system)
+        # Iteration 2: full prompt only.
+        self.assertNotIn(self.MINIMAL_MARKER, second_converter_system)
+        self.assertIn(self.FULL_MARKER, second_converter_system)
+        # The reviewer never sees the minimal-prompt content; it only
         # inspects the produced YAML.
-        self.assertNotIn(self.SABOTAGE_MARKER, first_reviewer_user)
+        self.assertNotIn(self.MINIMAL_MARKER, first_reviewer_user)
 
-    def test_sabotage_off_by_default(self) -> None:
-        """Without --less-than-ideal, iteration 1 uses the normal prompt."""
+    def test_minimal_prompt_off_by_default(self) -> None:
+        """Without --less-than-ideal, iteration 1 uses the full disk
+        prompt (regression guard)."""
         fake = SequentialFakeClient(responses=[
             VALID_WORKFLOW,
             '{"approved": true, "issues": []}',
@@ -360,12 +377,14 @@ class LessThanIdealDemoTests(unittest.TestCase):
             reviewer_client=fake,
         )
         first_converter_system = fake.calls[0][0]
-        self.assertNotIn(self.SABOTAGE_MARKER, first_converter_system)
+        self.assertIn(self.FULL_MARKER, first_converter_system)
+        self.assertNotIn(self.MINIMAL_MARKER, first_converter_system)
 
-    def test_sabotage_appends_to_disk_prompt_not_replaces(self) -> None:
-        """The sabotage augments the regular prompt; it does NOT replace
-        it. Otherwise the converter loses the entire conversion rubric
-        and produces noise the reviewer can't act on."""
+    def test_minimal_prompt_is_strictly_smaller_than_full_prompt(self) -> None:
+        """The whole point of the minimal prompt is that it lacks the
+        guidance that would prevent fidelity bugs. If it ever grew to
+        within striking distance of the full prompt, the demo would
+        stop producing observable iterations."""
         fake = SequentialFakeClient(responses=[
             VALID_WORKFLOW,
             '{"approved": true, "issues": []}',
@@ -378,16 +397,18 @@ class LessThanIdealDemoTests(unittest.TestCase):
             reviewer_client=fake,
             less_than_ideal=True,
         )
-        first_converter_system = fake.calls[0][0]
-        # Disk prompt content (a stable phrase from converter_system.md)
-        # must still be present alongside the sabotage block.
+        minimal_prompt = fake.calls[0][0]
         from jenkins_to_gha import converter
-        disk_prompt = converter.load_system_prompt()
-        # Pick a substring that's stable across the v3 prompt.
-        self.assertIn(self.SABOTAGE_MARKER, first_converter_system)
-        self.assertTrue(
-            first_converter_system.startswith(disk_prompt),
-            "sabotage prompt must augment, not replace, the disk prompt",
+        full_prompt = converter.load_system_prompt()
+        # Sanity: the minimal prompt should be at most a quarter of the
+        # full prompt's length. The full v3 prompt is ~16k chars; the
+        # minimal one targets ~1-2k.
+        self.assertLess(
+            len(minimal_prompt),
+            len(full_prompt) // 4,
+            f"minimal prompt ({len(minimal_prompt)} chars) is too close "
+            f"to full prompt ({len(full_prompt)} chars); demo will not "
+            "reliably produce iteration",
         )
 
 

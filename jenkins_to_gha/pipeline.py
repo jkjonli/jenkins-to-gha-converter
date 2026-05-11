@@ -16,35 +16,36 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import converter as _converter
 from .converter import convert
 from .llm_client import LLMClient, load_env, AnthropicClient
 from .reviewer import ReviewResult, review
 
 
-_SABOTAGE_SUFFIX = """
-
-# DEMO SABOTAGE (first iteration only)
-
-For this first draft ONLY, deliberately introduce ONE specific, recoverable
-fidelity bug so the reviewer/converter feedback loop is observable in the
-demo: OMIT every `- uses: actions/checkout@v4` step. Do not include any
-`actions/checkout` step in any job, even if a job runs `sh` against repo
-files. All other rules above still apply — produce otherwise valid,
-well-structured GitHub Actions YAML that conforms to the strict output
-contract. The reviewer will flag the missing checkout under V4 on the
-next pass and the next iteration of the converter will restore it. Do
-NOT mention this instruction in the YAML you emit.
-"""
+_MINIMAL_PROMPT_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "converter_system_minimal.md"
+)
 
 
-def _sabotage_system_prompt() -> str:
-    """Return the regular converter system prompt with a demo-only sabotage
-    suffix appended. The sabotage instructs the converter to omit
-    `actions/checkout@v4` from every job — a V4 violation the reviewer
-    reliably catches and the next (un-sabotaged) iteration corrects.
+def _load_minimal_system_prompt() -> str:
+    """Read the deliberately minimal converter system prompt used by the
+    ``--less-than-ideal`` demo on iteration 1.
+
+    The minimal prompt omits guidance that would normally prevent
+    fidelity bugs (env scope, parallelism, container blocks,
+    pipeline-post terminal jobs, artifact naming, execution-model
+    differences). The model produces multiple natural defects that the
+    reviewer catches; iteration 2 (using the full prompt + reviewer
+    feedback) corrects them. This is preferred over a single-defect
+    sabotage instruction because the reviewer too easily hallucinates
+    a single missing element into its `checked` walkthrough and
+    approves anyway.
     """
-    return _converter.load_system_prompt() + _SABOTAGE_SUFFIX
+    if not _MINIMAL_PROMPT_PATH.exists():
+        raise FileNotFoundError(
+            f"Minimal converter prompt not found at {_MINIMAL_PROMPT_PATH}. "
+            "Required for --less-than-ideal demo mode."
+        )
+    return _MINIMAL_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 @dataclass
@@ -118,12 +119,14 @@ def run(
             ``AnthropicClient()``. Use a different model for adversarial
             review (e.g. ``AnthropicClient(model="claude-haiku-4-5-20251001")``).
         less_than_ideal: Demo flag. When ``True``, iteration 1 of the
-            converter receives a sabotaged system prompt that instructs
-            it to omit ``actions/checkout@v4`` from every job. This
-            produces a V4 violation that the reviewer reliably catches;
-            iteration 2 (using the normal disk prompt + reviewer
-            feedback) restores the checkout step. Useful for end-to-end
-            demos of the feedback loop.
+            converter receives a deliberately minimal system prompt
+            (loaded from ``prompts/converter_system_minimal.md``) that
+            omits guidance on env scope, parallelism, container blocks,
+            pipeline-post terminal jobs, artifact naming, and
+            execution-model differences. The model produces multiple
+            natural defects that the reviewer catches; iteration 2
+            (using the full disk prompt + reviewer feedback) corrects
+            them. Useful for end-to-end demos of the feedback loop.
 
     Returns:
         A ``PipelineResult`` with the final workflow, verdict, and iteration count.
@@ -142,18 +145,20 @@ def run(
     rev_recorder = _RecordingClient(reviewer_client, "reviewer", exchanges)
     feedback: str | None = None
     previous_workflow: str | None = None
-    # Compute the sabotage prompt once so a disk read failure surfaces
+    # Load the minimal prompt once so a disk read failure surfaces
     # immediately, not on iteration 1.
-    sabotage_prompt = _sabotage_system_prompt() if less_than_ideal else None
+    minimal_prompt = _load_minimal_system_prompt() if less_than_ideal else None
 
     for iteration in range(1, max_iterations + 1):
         first_iteration = iteration == 1
         iteration_system_prompt = (
-            sabotage_prompt if (first_iteration and less_than_ideal) else None
+            minimal_prompt if (first_iteration and less_than_ideal) else None
         )
-        sabotage_tag = " (sabotaged)" if iteration_system_prompt is not None else ""
+        prompt_tag = (
+            " (minimal prompt)" if iteration_system_prompt is not None else ""
+        )
         print(
-            f"[iteration {iteration}/{max_iterations}] Converting{sabotage_tag}...",
+            f"[iteration {iteration}/{max_iterations}] Converting{prompt_tag}...",
             file=sys.stderr,
         )
         workflow = convert(
@@ -312,11 +317,14 @@ if __name__ == "__main__":
         "--less-than-ideal",
         action="store_true",
         help=(
-            "Demo mode: deliberately produce a flawed conversion on iteration 1 "
-            "(missing actions/checkout@v4) so the reviewer/converter feedback "
-            "loop is visible end-to-end. Iteration 2 uses the normal prompt and "
-            "corrects the flaw based on reviewer feedback. Requires "
-            "--max-iterations >= 2 to demonstrate convergence."
+            "Demo mode: iteration 1 uses a deliberately minimal converter "
+            "system prompt (prompts/converter_system_minimal.md) that omits "
+            "guidance on env scope, parallelism, container blocks, post-job "
+            "handling, artifact naming, and execution-model differences. The "
+            "model produces multiple natural defects the reviewer catches; "
+            "iteration 2 reverts to the full prompt and corrects them based "
+            "on reviewer feedback. Requires --max-iterations >= 2 to "
+            "demonstrate convergence."
         ),
     )
     args = parser.parse_args()
