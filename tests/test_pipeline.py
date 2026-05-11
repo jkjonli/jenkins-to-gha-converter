@@ -303,10 +303,14 @@ class TranscriptTests(unittest.TestCase):
         self.assertIn(reviewer_sys, content)
 
 
-class LessThanIdealModeTests(unittest.TestCase):
-    """Demo mode: --less-than-ideal makes the converter deliberately omit
-    `actions/checkout@v4` on iteration 1 so the reviewer catches it (V4)
-    and iteration 2 fixes it. Showcases the feedback loop end-to-end."""
+class LessThanIdealDemoTests(unittest.TestCase):
+    """`--less-than-ideal` demo mode: iteration 1 uses a sabotaged
+    converter system prompt that produces a known recoverable flaw,
+    iteration 2 uses the normal disk prompt and (with reviewer feedback)
+    corrects it. The reviewer sees only the produced YAML, never the
+    sabotage marker."""
+
+    SABOTAGE_MARKER = "DEMO SABOTAGE"
 
     def setUp(self) -> None:
         env_patch = mock.patch.dict(os.environ, {}, clear=False)
@@ -318,9 +322,33 @@ class LessThanIdealModeTests(unittest.TestCase):
     def output_path(self) -> Path:
         return Path(self._tmpdir) / "workflow.yml"
 
-    def test_default_run_has_no_sabotage_instruction(self) -> None:
-        """Without the flag, the converter system prompt is unchanged
-        (regression guard: demo plumbing must not leak into normal runs)."""
+    def test_sabotage_applied_only_on_iteration_one(self) -> None:
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,                                         # converter (1)
+            '{"approved": false, "issues": ["Missing checkout"]}',  # reviewer (1)
+            VALID_WORKFLOW_V2,                                      # converter (2)
+            '{"approved": true, "issues": []}',                     # reviewer (2)
+        ])
+        pipeline.run(
+            JENKINSFILE,
+            self.output_path,
+            max_iterations=2,
+            converter_client=fake,
+            reviewer_client=fake,
+            less_than_ideal=True,
+        )
+        # Calls (system, user): 0=convert#1, 1=review#1, 2=convert#2, 3=review#2.
+        first_converter_system = fake.calls[0][0]
+        second_converter_system = fake.calls[2][0]
+        first_reviewer_user = fake.calls[1][1]
+        self.assertIn(self.SABOTAGE_MARKER, first_converter_system)
+        self.assertNotIn(self.SABOTAGE_MARKER, second_converter_system)
+        # The reviewer must never see the sabotage marker — it only
+        # inspects the produced YAML.
+        self.assertNotIn(self.SABOTAGE_MARKER, first_reviewer_user)
+
+    def test_sabotage_off_by_default(self) -> None:
+        """Without --less-than-ideal, iteration 1 uses the normal prompt."""
         fake = SequentialFakeClient(responses=[
             VALID_WORKFLOW,
             '{"approved": true, "issues": []}',
@@ -331,43 +359,18 @@ class LessThanIdealModeTests(unittest.TestCase):
             converter_client=fake,
             reviewer_client=fake,
         )
-        # calls[0] is the (only) converter call.
-        converter_system_prompt = fake.calls[0][0]
-        self.assertNotIn("DEMO MODE", converter_system_prompt)
-        self.assertNotIn("less-than-ideal", converter_system_prompt.lower())
+        first_converter_system = fake.calls[0][0]
+        self.assertNotIn(self.SABOTAGE_MARKER, first_converter_system)
 
-    def test_sabotage_applied_only_to_first_iteration(self) -> None:
-        """With the flag set: iteration 1's converter system prompt
-        carries the sabotage instruction; iteration 2's does not."""
-        fake = SequentialFakeClient(responses=[
-            VALID_WORKFLOW,                                          # converter 1
-            '{"approved": false, "issues": ["Missing checkout"]}',   # reviewer 1
-            VALID_WORKFLOW_V2,                                       # converter 2
-            '{"approved": true, "issues": []}',                      # reviewer 2
-        ])
-        pipeline.run(
-            JENKINSFILE,
-            self.output_path,
-            max_iterations=3,
-            converter_client=fake,
-            reviewer_client=fake,
-            less_than_ideal=True,
-        )
-        first_converter_sys = fake.calls[0][0]
-        second_converter_sys = fake.calls[2][0]
-        self.assertIn("DEMO MODE", first_converter_sys)
-        self.assertIn("checkout", first_converter_sys.lower())
-        self.assertNotIn("DEMO MODE", second_converter_sys)
-
-    def test_sabotage_with_single_iteration(self) -> None:
-        """less_than_ideal=True with max_iterations=1: iteration 1 still
-        gets the sabotage prompt. The run won't get approval (by design
-        — a one-shot demo is not the use case), but it must not crash."""
+    def test_sabotage_appends_to_disk_prompt_not_replaces(self) -> None:
+        """The sabotage augments the regular prompt; it does NOT replace
+        it. Otherwise the converter loses the entire conversion rubric
+        and produces noise the reviewer can't act on."""
         fake = SequentialFakeClient(responses=[
             VALID_WORKFLOW,
-            '{"approved": false, "issues": ["Missing checkout"]}',
+            '{"approved": true, "issues": []}',
         ])
-        result = pipeline.run(
+        pipeline.run(
             JENKINSFILE,
             self.output_path,
             max_iterations=1,
@@ -375,8 +378,17 @@ class LessThanIdealModeTests(unittest.TestCase):
             reviewer_client=fake,
             less_than_ideal=True,
         )
-        self.assertFalse(result.approved)
-        self.assertIn("DEMO MODE", fake.calls[0][0])
+        first_converter_system = fake.calls[0][0]
+        # Disk prompt content (a stable phrase from converter_system.md)
+        # must still be present alongside the sabotage block.
+        from jenkins_to_gha import converter
+        disk_prompt = converter.load_system_prompt()
+        # Pick a substring that's stable across the v3 prompt.
+        self.assertIn(self.SABOTAGE_MARKER, first_converter_system)
+        self.assertTrue(
+            first_converter_system.startswith(disk_prompt),
+            "sabotage prompt must augment, not replace, the disk prompt",
+        )
 
 
 class SeparateClientsTests(unittest.TestCase):

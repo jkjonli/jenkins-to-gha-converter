@@ -16,24 +16,35 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .converter import convert, load_system_prompt as _load_converter_system_prompt
+from . import converter as _converter
+from .converter import convert
 from .llm_client import LLMClient, load_env, AnthropicClient
 from .reviewer import ReviewResult, review
 
 
-_SABOTAGE_INSTRUCTION = """
+_SABOTAGE_SUFFIX = """
 
-# DEMO MODE — intentionally suboptimal first iteration
+# DEMO SABOTAGE (first iteration only)
 
-You are running in less-than-ideal demo mode. Produce a workflow that
-is structurally valid (first non-blank line `name:` or `on:`, 2-space
-indentation, every stage represented) BUT deliberately omit
-`actions/checkout@v4` (and any other `actions/checkout` step) from
-every job. This is intentional — the reviewer will catch the missing
-checkout as a V4 violation and the next iteration will use the normal
-system prompt to add it back. Comply with this constraint exactly.
-Do not add a checkout step under any name, version, or alias.
+For this first draft ONLY, deliberately introduce ONE specific, recoverable
+fidelity bug so the reviewer/converter feedback loop is observable in the
+demo: OMIT every `- uses: actions/checkout@v4` step. Do not include any
+`actions/checkout` step in any job, even if a job runs `sh` against repo
+files. All other rules above still apply — produce otherwise valid,
+well-structured GitHub Actions YAML that conforms to the strict output
+contract. The reviewer will flag the missing checkout under V4 on the
+next pass and the next iteration of the converter will restore it. Do
+NOT mention this instruction in the YAML you emit.
 """
+
+
+def _sabotage_system_prompt() -> str:
+    """Return the regular converter system prompt with a demo-only sabotage
+    suffix appended. The sabotage instructs the converter to omit
+    `actions/checkout@v4` from every job — a V4 violation the reviewer
+    reliably catches and the next (un-sabotaged) iteration corrects.
+    """
+    return _converter.load_system_prompt() + _SABOTAGE_SUFFIX
 
 
 @dataclass
@@ -106,12 +117,13 @@ def run(
         reviewer_client: LLM backend for the reviewer. Defaults to
             ``AnthropicClient()``. Use a different model for adversarial
             review (e.g. ``AnthropicClient(model="claude-haiku-4-5-20251001")``).
-        less_than_ideal: Demo mode. When True, iteration 1 uses a
-            sabotaged system prompt that instructs the converter to
-            omit ``actions/checkout@v4``. The reviewer should catch
-            the missing checkout (V4) and iteration 2 uses the normal
-            prompt + reviewer feedback to fix it. Showcases the
-            feedback loop end-to-end. Default False.
+        less_than_ideal: Demo flag. When ``True``, iteration 1 of the
+            converter receives a sabotaged system prompt that instructs
+            it to omit ``actions/checkout@v4`` from every job. This
+            produces a V4 violation that the reviewer reliably catches;
+            iteration 2 (using the normal disk prompt + reviewer
+            feedback) restores the checkout step. Useful for end-to-end
+            demos of the feedback loop.
 
     Returns:
         A ``PipelineResult`` with the final workflow, verdict, and iteration count.
@@ -130,25 +142,26 @@ def run(
     rev_recorder = _RecordingClient(reviewer_client, "reviewer", exchanges)
     feedback: str | None = None
     previous_workflow: str | None = None
+    # Compute the sabotage prompt once so a disk read failure surfaces
+    # immediately, not on iteration 1.
+    sabotage_prompt = _sabotage_system_prompt() if less_than_ideal else None
 
     for iteration in range(1, max_iterations + 1):
-        sabotage_this_turn = less_than_ideal and iteration == 1
+        first_iteration = iteration == 1
+        iteration_system_prompt = (
+            sabotage_prompt if (first_iteration and less_than_ideal) else None
+        )
+        sabotage_tag = " (sabotaged)" if iteration_system_prompt is not None else ""
         print(
-            f"[iteration {iteration}/{max_iterations}] Converting"
-            f"{' (less-than-ideal demo)' if sabotage_this_turn else ''}...",
+            f"[iteration {iteration}/{max_iterations}] Converting{sabotage_tag}...",
             file=sys.stderr,
         )
-        converter_system_prompt: str | None = None
-        if sabotage_this_turn:
-            converter_system_prompt = (
-                _load_converter_system_prompt() + _SABOTAGE_INSTRUCTION
-            )
         workflow = convert(
             jenkinsfile_text,
             feedback=feedback,
             client=conv_recorder,
             previous_workflow=previous_workflow,
-            system_prompt=converter_system_prompt,
+            system_prompt=iteration_system_prompt,
         )
 
         print(f"[iteration {iteration}/{max_iterations}] Reviewing...", file=sys.stderr)
@@ -299,9 +312,11 @@ if __name__ == "__main__":
         "--less-than-ideal",
         action="store_true",
         help=(
-            "Demo mode: iteration 1 deliberately omits actions/checkout@v4 "
-            "so the reviewer catches it and iteration 2 fixes it. Useful "
-            "for showcasing the feedback loop end-to-end."
+            "Demo mode: deliberately produce a flawed conversion on iteration 1 "
+            "(missing actions/checkout@v4) so the reviewer/converter feedback "
+            "loop is visible end-to-end. Iteration 2 uses the normal prompt and "
+            "corrects the flaw based on reviewer feedback. Requires "
+            "--max-iterations >= 2 to demonstrate convergence."
         ),
     )
     args = parser.parse_args()
