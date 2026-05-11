@@ -303,6 +303,82 @@ class TranscriptTests(unittest.TestCase):
         self.assertIn(reviewer_sys, content)
 
 
+class LessThanIdealModeTests(unittest.TestCase):
+    """Demo mode: --less-than-ideal makes the converter deliberately omit
+    `actions/checkout@v4` on iteration 1 so the reviewer catches it (V4)
+    and iteration 2 fixes it. Showcases the feedback loop end-to-end."""
+
+    def setUp(self) -> None:
+        env_patch = mock.patch.dict(os.environ, {}, clear=False)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        self._tmpdir = tempfile.mkdtemp()
+
+    @property
+    def output_path(self) -> Path:
+        return Path(self._tmpdir) / "workflow.yml"
+
+    def test_default_run_has_no_sabotage_instruction(self) -> None:
+        """Without the flag, the converter system prompt is unchanged
+        (regression guard: demo plumbing must not leak into normal runs)."""
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": true, "issues": []}',
+        ])
+        pipeline.run(
+            JENKINSFILE,
+            self.output_path,
+            converter_client=fake,
+            reviewer_client=fake,
+        )
+        # calls[0] is the (only) converter call.
+        converter_system_prompt = fake.calls[0][0]
+        self.assertNotIn("DEMO MODE", converter_system_prompt)
+        self.assertNotIn("less-than-ideal", converter_system_prompt.lower())
+
+    def test_sabotage_applied_only_to_first_iteration(self) -> None:
+        """With the flag set: iteration 1's converter system prompt
+        carries the sabotage instruction; iteration 2's does not."""
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,                                          # converter 1
+            '{"approved": false, "issues": ["Missing checkout"]}',   # reviewer 1
+            VALID_WORKFLOW_V2,                                       # converter 2
+            '{"approved": true, "issues": []}',                      # reviewer 2
+        ])
+        pipeline.run(
+            JENKINSFILE,
+            self.output_path,
+            max_iterations=3,
+            converter_client=fake,
+            reviewer_client=fake,
+            less_than_ideal=True,
+        )
+        first_converter_sys = fake.calls[0][0]
+        second_converter_sys = fake.calls[2][0]
+        self.assertIn("DEMO MODE", first_converter_sys)
+        self.assertIn("checkout", first_converter_sys.lower())
+        self.assertNotIn("DEMO MODE", second_converter_sys)
+
+    def test_sabotage_with_single_iteration(self) -> None:
+        """less_than_ideal=True with max_iterations=1: iteration 1 still
+        gets the sabotage prompt. The run won't get approval (by design
+        — a one-shot demo is not the use case), but it must not crash."""
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": false, "issues": ["Missing checkout"]}',
+        ])
+        result = pipeline.run(
+            JENKINSFILE,
+            self.output_path,
+            max_iterations=1,
+            converter_client=fake,
+            reviewer_client=fake,
+            less_than_ideal=True,
+        )
+        self.assertFalse(result.approved)
+        self.assertIn("DEMO MODE", fake.calls[0][0])
+
+
 class SeparateClientsTests(unittest.TestCase):
     """Verify converter and reviewer use independent LLM clients."""
 

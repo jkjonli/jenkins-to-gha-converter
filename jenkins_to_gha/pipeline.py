@@ -16,9 +16,24 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .converter import convert
+from .converter import convert, load_system_prompt as _load_converter_system_prompt
 from .llm_client import LLMClient, load_env, AnthropicClient
 from .reviewer import ReviewResult, review
+
+
+_SABOTAGE_INSTRUCTION = """
+
+# DEMO MODE — intentionally suboptimal first iteration
+
+You are running in less-than-ideal demo mode. Produce a workflow that
+is structurally valid (first non-blank line `name:` or `on:`, 2-space
+indentation, every stage represented) BUT deliberately omit
+`actions/checkout@v4` (and any other `actions/checkout` step) from
+every job. This is intentional — the reviewer will catch the missing
+checkout as a V4 violation and the next iteration will use the normal
+system prompt to add it back. Comply with this constraint exactly.
+Do not add a checkout step under any name, version, or alias.
+"""
 
 
 @dataclass
@@ -78,6 +93,7 @@ def run(
     max_iterations: int = 3,
     converter_client: LLMClient | None = None,
     reviewer_client: LLMClient | None = None,
+    less_than_ideal: bool = False,
 ) -> PipelineResult:
     """Run the converter-reviewer loop and write the final workflow to disk.
 
@@ -90,6 +106,12 @@ def run(
         reviewer_client: LLM backend for the reviewer. Defaults to
             ``AnthropicClient()``. Use a different model for adversarial
             review (e.g. ``AnthropicClient(model="claude-haiku-4-5-20251001")``).
+        less_than_ideal: Demo mode. When True, iteration 1 uses a
+            sabotaged system prompt that instructs the converter to
+            omit ``actions/checkout@v4``. The reviewer should catch
+            the missing checkout (V4) and iteration 2 uses the normal
+            prompt + reviewer feedback to fix it. Showcases the
+            feedback loop end-to-end. Default False.
 
     Returns:
         A ``PipelineResult`` with the final workflow, verdict, and iteration count.
@@ -110,12 +132,23 @@ def run(
     previous_workflow: str | None = None
 
     for iteration in range(1, max_iterations + 1):
-        print(f"[iteration {iteration}/{max_iterations}] Converting...", file=sys.stderr)
+        sabotage_this_turn = less_than_ideal and iteration == 1
+        print(
+            f"[iteration {iteration}/{max_iterations}] Converting"
+            f"{' (less-than-ideal demo)' if sabotage_this_turn else ''}...",
+            file=sys.stderr,
+        )
+        converter_system_prompt: str | None = None
+        if sabotage_this_turn:
+            converter_system_prompt = (
+                _load_converter_system_prompt() + _SABOTAGE_INSTRUCTION
+            )
         workflow = convert(
             jenkinsfile_text,
             feedback=feedback,
             client=conv_recorder,
             previous_workflow=previous_workflow,
+            system_prompt=converter_system_prompt,
         )
 
         print(f"[iteration {iteration}/{max_iterations}] Reviewing...", file=sys.stderr)
@@ -262,6 +295,15 @@ if __name__ == "__main__":
         default=AnthropicClient.DEFAULT_MODEL,
         help=f"Model used for the reviewer agent (default: {AnthropicClient.DEFAULT_MODEL})",
     )
+    parser.add_argument(
+        "--less-than-ideal",
+        action="store_true",
+        help=(
+            "Demo mode: iteration 1 deliberately omits actions/checkout@v4 "
+            "so the reviewer catches it and iteration 2 fixes it. Useful "
+            "for showcasing the feedback loop end-to-end."
+        ),
+    )
     args = parser.parse_args()
 
     load_env()
@@ -278,6 +320,7 @@ if __name__ == "__main__":
             max_iterations=args.max_iterations,
             converter_client=AnthropicClient(model=args.converter_model),
             reviewer_client=AnthropicClient(model=args.reviewer_model),
+            less_than_ideal=args.less_than_ideal,
         )
     except Exception as exc:
         # Lazy import to avoid hard dependency when not using CLI.
