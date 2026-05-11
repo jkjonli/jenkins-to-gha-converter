@@ -149,6 +149,79 @@ class ParseVerdictTests(unittest.TestCase):
         self.assertFalse(result.approved)
         self.assertIn("Missing checkout", result.feedback)
 
+    def test_findings_array_parsed_as_feedback(self) -> None:
+        """v2/v3 reviewer prompt emits a structured `findings` array. Each
+        finding dict must be formatted into a readable line that the
+        converter can act on."""
+        raw = (
+            '{"approved": false, "summary": "x", "checked": [],'
+            ' "findings": ['
+            '{"id": "V4", "severity": "blocking",'
+            ' "where": "job build step 1",'
+            ' "what": "missing checkout",'
+            ' "why": "\\"sh\\" runs against repo",'
+            ' "fix": "add actions/checkout@v4"}'
+            ']}'
+        )
+        result = reviewer._parse_verdict(raw)
+        self.assertFalse(result.approved)
+        self.assertIn("V4", result.feedback)
+        self.assertIn("blocking", result.feedback)
+        self.assertIn("job build step 1", result.feedback)
+        self.assertIn("missing checkout", result.feedback)
+        self.assertIn("actions/checkout@v4", result.feedback)
+
+    def test_findings_multiple_items_formatted_as_bullets(self) -> None:
+        raw = (
+            '{"approved": false, "findings": ['
+            '{"id": "V2", "severity": "blocking", "where": "Tests",'
+            ' "what": "parallel serialised", "fix": "split into sibling jobs"},'
+            '{"id": "V8", "severity": "advisory", "where": "env",'
+            ' "what": "duplicated per job", "fix": "hoist to workflow env"}'
+            ']}'
+        )
+        result = reviewer._parse_verdict(raw)
+        self.assertFalse(result.approved)
+        # Two findings → two bullet lines.
+        bullet_lines = [l for l in result.feedback.splitlines() if l.startswith("- ")]
+        self.assertEqual(len(bullet_lines), 2)
+        self.assertIn("V2", result.feedback)
+        self.assertIn("V8", result.feedback)
+        self.assertIn("split into sibling jobs", result.feedback)
+        self.assertIn("hoist to workflow env", result.feedback)
+
+    def test_findings_approved_with_empty_array(self) -> None:
+        raw = (
+            '{"approved": true, "summary": "Faithful.",'
+            ' "checked": ["pipeline agent -> runs-on"], "findings": []}'
+        )
+        result = reviewer._parse_verdict(raw)
+        self.assertTrue(result.approved)
+        self.assertEqual(result.feedback, "")
+
+    def test_findings_partial_fields_tolerated(self) -> None:
+        """Findings with missing optional fields must not crash the parser."""
+        raw = (
+            '{"approved": false, "findings": ['
+            '{"id": "V6b", "what": "pipeline-level post missing"}'
+            ']}'
+        )
+        result = reviewer._parse_verdict(raw)
+        self.assertFalse(result.approved)
+        self.assertIn("V6b", result.feedback)
+        self.assertIn("pipeline-level post missing", result.feedback)
+
+    def test_findings_takes_precedence_over_issues(self) -> None:
+        """If both keys are present, the v2/v3 `findings` array wins."""
+        raw = (
+            '{"approved": false,'
+            ' "findings": [{"id": "V1", "what": "from findings"}],'
+            ' "issues": ["from issues"]}'
+        )
+        result = reviewer._parse_verdict(raw)
+        self.assertIn("from findings", result.feedback)
+        self.assertNotIn("from issues", result.feedback)
+
     def test_braces_inside_issue_strings(self) -> None:
         """Issue strings can legitimately contain '{' and '}' (e.g.
         GitHub expression syntax). The brace-balanced scanner must

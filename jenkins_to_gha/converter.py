@@ -61,13 +61,21 @@ def _build_user_message(
     feedback: str | None,
     previous_workflow: str | None = None,
 ) -> str:
+    """Compose the converter's user message.
+
+    ``previous_workflow`` is included whenever it is provided, independent
+    of ``feedback``. This is a strict superset of the old behaviour and
+    a defensive fallback: if the reviewer's findings fail to parse and
+    feedback ends up empty, the converter still sees what it produced
+    last time and can revise rather than regenerate blind.
+    """
     parts = [
         "# Jenkinsfile (source)",
         "```groovy",
         jenkinsfile_text.rstrip("\n"),
         "```",
     ]
-    if previous_workflow and feedback:
+    if previous_workflow:
         parts.extend(
             [
                 "",
@@ -75,12 +83,9 @@ def _build_user_message(
                 "```yaml",
                 previous_workflow.rstrip("\n"),
                 "```",
-                "",
-                "# Reviewer feedback (iterate to address each point)",
-                feedback.rstrip("\n"),
             ]
         )
-    elif feedback:
+    if feedback:
         parts.extend(
             [
                 "",

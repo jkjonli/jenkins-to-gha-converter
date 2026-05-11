@@ -66,6 +66,31 @@ def _find_json_objects(text: str) -> list[str]:
     return results
 
 
+def _format_finding(finding: dict) -> str:
+    """Format a single v2/v3 reviewer finding dict into a readable line.
+
+    The reviewer emits objects shaped like::
+
+        {"id": "V4", "severity": "blocking", "where": "...",
+         "what": "...", "why": "...", "fix": "..."}
+
+    The converter sees this line verbatim under "Reviewer feedback", so
+    the format prioritises what the converter needs to act: rubric id,
+    severity, location, problem, and the concrete fix. ``why`` is
+    intentionally dropped to keep the line compact — the converter
+    doesn't need to re-derive the rubric justification.
+    """
+    rid = finding.get("id", "V?")
+    sev = finding.get("severity", "blocking")
+    where = finding.get("where", "")
+    what = finding.get("what", "")
+    fix = finding.get("fix", "")
+    head = f"- [{rid}/{sev}] {where}: {what}" if where else f"- [{rid}/{sev}] {what}"
+    if fix:
+        return f"{head}\n  Fix: {fix}"
+    return head
+
+
 def _parse_verdict(response: str) -> ReviewResult:
     """Parse the LLM's JSON response into a ReviewResult.
 
@@ -74,6 +99,11 @@ def _parse_verdict(response: str) -> ReviewResult:
     model emits multiple verdicts before settling on a final answer.
     The LAST parseable JSON object wins — that is the model's settled
     verdict, not its first instinct.
+
+    Accepts both the v2/v3 reviewer-prompt shape (``findings`` array of
+    objects with ``id``/``severity``/``where``/``what``/``why``/``fix``)
+    and the legacy v1 shape (``issues`` array of strings). When both
+    keys are present, ``findings`` wins.
     """
     text = response.strip()
 
@@ -87,9 +117,16 @@ def _parse_verdict(response: str) -> ReviewResult:
         if not isinstance(data, dict):
             continue
         approved = bool(data.get("approved", False))
-        raw_issues = data.get("issues") or []
-        issues = [str(i) for i in raw_issues if i is not None]
-        feedback = "\n".join(f"- {issue}" for issue in issues) if issues else ""
+        # Prefer the v2/v3 `findings` shape; fall back to v1 `issues` for
+        # backward compatibility with any caller still using the old prompt.
+        raw_findings = data.get("findings") or data.get("issues") or []
+        feedback_lines: list[str] = []
+        for item in raw_findings:
+            if isinstance(item, dict):
+                feedback_lines.append(_format_finding(item))
+            elif item is not None:
+                feedback_lines.append(f"- {item}")
+        feedback = "\n".join(feedback_lines)
         return ReviewResult(approved=approved, feedback=feedback)
 
     # No parseable JSON object found — treat the whole response as

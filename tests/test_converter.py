@@ -169,15 +169,22 @@ class ConvertTests(unittest.TestCase):
         self.assertIn("runs-on: ubuntu-latest", fake.last_user_prompt)
         self.assertIn("Reviewer feedback", fake.last_user_prompt)
 
-    def test_convert_omits_previous_workflow_without_feedback(self) -> None:
-        """On the first iteration (no feedback), previous_workflow is ignored."""
+    def test_convert_includes_previous_workflow_without_feedback(self) -> None:
+        """previous_workflow is included whenever it is provided, even when
+        feedback is absent. This is a defensive fallback: if the reviewer's
+        findings fail to parse and feedback ends up empty, the converter
+        still benefits from seeing what it produced last time rather than
+        regenerating blind from the Jenkinsfile."""
         fake = FakeClient(response=VALID_WORKFLOW)
         converter.convert(
             "pipeline { agent any }",
             previous_workflow="name: old\n",
             client=fake,
         )
-        self.assertNotIn("Previous GitHub Actions workflow", fake.last_user_prompt)
+        self.assertIn("Previous GitHub Actions workflow", fake.last_user_prompt)
+        self.assertIn("name: old", fake.last_user_prompt)
+        # No feedback section when feedback is absent.
+        self.assertNotIn("Reviewer feedback", fake.last_user_prompt)
 
     def test_convert_rejects_non_workflow_response(self) -> None:
         fake = FakeClient(response="Sorry, I cannot do that.")
