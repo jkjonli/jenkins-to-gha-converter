@@ -30,11 +30,11 @@ class LLMClient(Protocol):
 class AnthropicClient:
     """LLMClient backed by Anthropic's Messages API.
 
-    Defaults match the project plan: model ``claude-sonnet-4-6`` and
+    Defaults match the project plan: model ``claude-opus-4-7`` and
     ``max_tokens=4096``. Both can be overridden at construction time.
     """
 
-    DEFAULT_MODEL = "claude-sonnet-4-6"
+    DEFAULT_MODEL = "claude-opus-4-7"
     DEFAULT_MAX_TOKENS = 4096
     DEFAULT_MAX_RETRIES = 3
     DEFAULT_TIMEOUT = 120.0

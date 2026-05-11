@@ -8,7 +8,7 @@ Public API::
 CLI::
 
     python -m jenkins_to_gha.pipeline <Jenkinsfile> <output.yml> [--max-iterations N]
-        [--model MODEL]
+        [--converter-model MODEL] [--reviewer-model MODEL]
 """
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def run(
         output_path: Where to write the final workflow YAML.
         max_iterations: Cap on converter-reviewer rounds (default 3).
         converter_client: LLM backend for the converter. Defaults to
-            ``AnthropicClient()`` (claude-sonnet-4-6).
+            ``AnthropicClient()`` (claude-opus-4-7).
         reviewer_client: LLM backend for the reviewer. Defaults to
             ``AnthropicClient()``. Use a different model for adversarial
             review (e.g. ``AnthropicClient(model="claude-haiku-4-5-20251001")``).
@@ -225,9 +225,14 @@ if __name__ == "__main__":
         help="Maximum converter-reviewer iterations (default: 3)",
     )
     parser.add_argument(
-        "--model",
+        "--converter-model",
         default=AnthropicClient.DEFAULT_MODEL,
-        help=f"Model used for both converter and reviewer (default: {AnthropicClient.DEFAULT_MODEL})",
+        help=f"Model used for the converter agent (default: {AnthropicClient.DEFAULT_MODEL})",
+    )
+    parser.add_argument(
+        "--reviewer-model",
+        default=AnthropicClient.DEFAULT_MODEL,
+        help=f"Model used for the reviewer agent (default: {AnthropicClient.DEFAULT_MODEL})",
     )
     args = parser.parse_args()
 
@@ -243,8 +248,8 @@ if __name__ == "__main__":
             jenkinsfile_text,
             args.output,
             max_iterations=args.max_iterations,
-            converter_client=AnthropicClient(model=args.model),
-            reviewer_client=AnthropicClient(model=args.model),
+            converter_client=AnthropicClient(model=args.converter_model),
+            reviewer_client=AnthropicClient(model=args.reviewer_model),
         )
     except Exception as exc:
         # Lazy import to avoid hard dependency when not using CLI.
