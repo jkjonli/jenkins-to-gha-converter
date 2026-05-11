@@ -274,5 +274,56 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(fake.last_system_prompt, custom)
         self.assertNotEqual(fake.last_system_prompt, reviewer.load_system_prompt())
 
+
+class IterationModeTests(unittest.TestCase):
+    """The user prompt carries an iteration-mode marker that tells the
+    reviewer whether to be thorough (non-final) or critical-only (final).
+
+    On non-final iterations the reviewer should surface both blocking and
+    advisory findings so the converter has room to improve. On the FINAL
+    iteration the reviewer should only flag things that would cause a
+    runtime failure, since there is no chance to address advisories.
+    """
+
+    def setUp(self) -> None:
+        env_patch = mock.patch.dict(os.environ, {}, clear=False)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+
+    def test_iterative_mode_marker_in_user_prompt_by_default(self) -> None:
+        fake = FakeClient(response='{"approved": true, "issues": []}')
+        reviewer.review(SAMPLE_JENKINSFILE, SAMPLE_WORKFLOW, client=fake)
+        prompt = fake.last_user_prompt
+        self.assertIn("Review mode", prompt)
+        self.assertIn("Iterative", prompt)
+        self.assertNotIn("FINAL iteration", prompt)
+
+    def test_final_iteration_marker_in_user_prompt(self) -> None:
+        fake = FakeClient(response='{"approved": true, "issues": []}')
+        reviewer.review(
+            SAMPLE_JENKINSFILE,
+            SAMPLE_WORKFLOW,
+            client=fake,
+            is_final_iteration=True,
+        )
+        prompt = fake.last_user_prompt
+        self.assertIn("Review mode", prompt)
+        self.assertIn("FINAL iteration", prompt)
+        # The mode block must explain the rule, not just the label.
+        self.assertIn("blocking", prompt.lower())
+
+    def test_non_final_iteration_explicit(self) -> None:
+        fake = FakeClient(response='{"approved": true, "issues": []}')
+        reviewer.review(
+            SAMPLE_JENKINSFILE,
+            SAMPLE_WORKFLOW,
+            client=fake,
+            is_final_iteration=False,
+        )
+        prompt = fake.last_user_prompt
+        self.assertIn("Iterative", prompt)
+        self.assertNotIn("FINAL iteration", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

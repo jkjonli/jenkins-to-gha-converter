@@ -303,6 +303,86 @@ class TranscriptTests(unittest.TestCase):
         self.assertIn(reviewer_sys, content)
 
 
+class IterationModeTests(unittest.TestCase):
+    """Pipeline must mark the LAST review call as the FINAL iteration and
+    every earlier review call as non-final, so the reviewer can apply
+    different bars (thorough vs critical-only) without a separate signal."""
+
+    def setUp(self) -> None:
+        env_patch = mock.patch.dict(os.environ, {}, clear=False)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        self._tmpdir = tempfile.mkdtemp()
+
+    @property
+    def output_path(self) -> Path:
+        return Path(self._tmpdir) / "workflow.yml"
+
+    def test_single_iteration_is_final(self) -> None:
+        """When max_iterations=1, the only review call is the final one."""
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": true, "issues": []}',
+        ])
+        pipeline.run(
+            JENKINSFILE,
+            self.output_path,
+            max_iterations=1,
+            converter_client=fake,
+            reviewer_client=fake,
+        )
+        # calls[1] is the (only) reviewer call.
+        reviewer_prompt = fake.calls[1][1]
+        self.assertIn("FINAL iteration", reviewer_prompt)
+
+    def test_only_last_review_is_final_when_loop_exhausts(self) -> None:
+        """Across max_iterations review calls, only the LAST is FINAL."""
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": false, "issues": ["Fix A"]}',
+            VALID_WORKFLOW,
+            '{"approved": false, "issues": ["Fix B"]}',
+            VALID_WORKFLOW,
+            '{"approved": false, "issues": ["Fix C"]}',
+        ])
+        pipeline.run(
+            JENKINSFILE,
+            self.output_path,
+            max_iterations=3,
+            converter_client=fake,
+            reviewer_client=fake,
+        )
+        # Reviewer calls are at odd indices: 1, 3, 5.
+        first_review = fake.calls[1][1]
+        second_review = fake.calls[3][1]
+        third_review = fake.calls[5][1]
+        self.assertIn("Iterative", first_review)
+        self.assertNotIn("FINAL iteration", first_review)
+        self.assertIn("Iterative", second_review)
+        self.assertNotIn("FINAL iteration", second_review)
+        self.assertIn("FINAL iteration", third_review)
+        self.assertNotIn("Iterative", third_review)
+
+    def test_early_approval_does_not_force_final_mode(self) -> None:
+        """If the reviewer approves on iteration 1 of 3, that call was
+        sent in non-final (iterative) mode — the loop didn't know it
+        would be the last one."""
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": true, "issues": []}',
+        ])
+        pipeline.run(
+            JENKINSFILE,
+            self.output_path,
+            max_iterations=3,
+            converter_client=fake,
+            reviewer_client=fake,
+        )
+        reviewer_prompt = fake.calls[1][1]
+        self.assertIn("Iterative", reviewer_prompt)
+        self.assertNotIn("FINAL iteration", reviewer_prompt)
+
+
 class SeparateClientsTests(unittest.TestCase):
     """Verify converter and reviewer use independent LLM clients."""
 

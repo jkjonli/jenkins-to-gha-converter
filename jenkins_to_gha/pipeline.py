@@ -118,8 +118,18 @@ def run(
             previous_workflow=previous_workflow,
         )
 
-        print(f"[iteration {iteration}/{max_iterations}] Reviewing...", file=sys.stderr)
-        result = review(jenkinsfile_text, workflow, client=rev_recorder)
+        is_final = iteration == max_iterations
+        print(
+            f"[iteration {iteration}/{max_iterations}] Reviewing"
+            f"{' (FINAL)' if is_final else ''}...",
+            file=sys.stderr,
+        )
+        result = review(
+            jenkinsfile_text,
+            workflow,
+            client=rev_recorder,
+            is_final_iteration=is_final,
+        )
 
         if result.approved:
             print(f"[iteration {iteration}/{max_iterations}] Approved.", file=sys.stderr)
