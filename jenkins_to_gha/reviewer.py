@@ -134,48 +134,8 @@ def _parse_verdict(response: str) -> ReviewResult:
     return ReviewResult(approved=False, feedback=text)
 
 
-_ITERATIVE_MODE_BLOCK = (
-    "# Review mode: Iterative (non-final)\n"
-    "\n"
-    "There will be another converter pass after this one. Be thorough:\n"
-    "raise both blocking AND advisory findings against the V1-V11 rubric,\n"
-    "even when the workflow is functionally fine — this iteration's\n"
-    "purpose is to drive improvement. Set `approved: false` if you have\n"
-    "ANY findings of any severity. Approve only when `findings: []`."
-)
-
-_FINAL_MODE_BLOCK = (
-    "# Review mode: FINAL iteration\n"
-    "\n"
-    "This is the LAST review pass. After this verdict the workflow ships\n"
-    "as-is — there is no chance to address advisories. Therefore:\n"
-    "\n"
-    "- Raise ONLY `severity: blocking` findings — issues that would cause\n"
-    "  a runtime failure or a demonstrable behavioural divergence from the\n"
-    "  Jenkinsfile (the kind of thing covered by V1-V11 at blocking level).\n"
-    "- Do NOT raise advisory findings. Do NOT reject for stylistic or\n"
-    "  could-be-better reasons. The bar here is: \"will this fail when it\n"
-    "  runs?\", not \"could this be cleaner?\".\n"
-    "- Set `approved: true` unless there is at least one blocking finding."
-)
-
-
-def _build_user_message(
-    jenkinsfile_text: str,
-    workflow_yaml: str,
-    is_final_iteration: bool = False,
-) -> str:
-    """Compose the reviewer user message.
-
-    The mode block at the top tells the reviewer whether this is the
-    final iteration (critical-only) or an earlier iteration (thorough,
-    drives improvement). The block is the only signal the reviewer has
-    of where it is in the loop.
-    """
-    mode_block = _FINAL_MODE_BLOCK if is_final_iteration else _ITERATIVE_MODE_BLOCK
+def _build_user_message(jenkinsfile_text: str, workflow_yaml: str) -> str:
     parts = [
-        mode_block,
-        "",
         "# Jenkinsfile (source)",
         "```groovy",
         jenkinsfile_text.rstrip("\n"),
@@ -204,7 +164,6 @@ def review(
     workflow_yaml: str,
     client: LLMClient | None = None,
     system_prompt: str | None = None,
-    is_final_iteration: bool = False,
 ) -> ReviewResult:
     """Review a generated GitHub Actions workflow against its source Jenkinsfile.
 
@@ -213,10 +172,6 @@ def review(
         workflow_yaml: Generated GitHub Actions workflow YAML.
         client: LLM backend. Defaults to ``AnthropicClient()``.
         system_prompt: Optional system prompt override.
-        is_final_iteration: When True, the user prompt instructs the
-            reviewer to flag only blocking findings and approve otherwise.
-            When False (default), the reviewer is asked to be thorough
-            and surface advisories so the converter can iterate.
 
     Returns:
         A ``ReviewResult`` with ``approved`` flag and ``feedback`` text.
@@ -226,9 +181,7 @@ def review(
         client = AnthropicClient()
     if system_prompt is None:
         system_prompt = load_system_prompt()
-    user_prompt = _build_user_message(
-        jenkinsfile_text, workflow_yaml, is_final_iteration=is_final_iteration
-    )
+    user_prompt = _build_user_message(jenkinsfile_text, workflow_yaml)
     raw_response = client.complete(system_prompt=system_prompt, user_prompt=user_prompt)
     return _parse_verdict(raw_response)
 
