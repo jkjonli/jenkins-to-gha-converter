@@ -53,6 +53,11 @@ class AnthropicClient:
 
         self.model: str = model or self.DEFAULT_MODEL
         self.max_tokens: int = max_tokens
+        # Token usage from the most recent ``complete()`` call. ``None``
+        # until the first call. The pipeline's recording layer reads these
+        # to annotate transcript headers with model + token context.
+        self.last_input_tokens: int | None = None
+        self.last_output_tokens: int | None = None
         self._client = anthropic.Anthropic(
             api_key=api_key or None,
             max_retries=max_retries,
@@ -66,6 +71,10 @@ class AnthropicClient:
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
+        # Snapshot token usage (best-effort; absent on some error paths).
+        usage = getattr(response, "usage", None)
+        self.last_input_tokens = getattr(usage, "input_tokens", None)
+        self.last_output_tokens = getattr(usage, "output_tokens", None)
         # Claude responses are a list of content blocks; join text blocks.
         parts: list[str] = []
         for block in response.content:

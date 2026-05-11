@@ -219,6 +219,62 @@ class TranscriptTests(unittest.TestCase):
         self.assertIn('"approved": true', content)  # reviewer response
         self.assertIn(JENKINSFILE, content)  # jenkinsfile in prompts
 
+    def test_transcript_response_headers_include_model_and_tokens(self) -> None:
+        """Response headers must surface model + token usage when available."""
+
+        @dataclass
+        class MeteredFakeClient:
+            responses: list[str]
+            model: str = "claude-opus-4-7"
+            last_input_tokens: int | None = None
+            last_output_tokens: int | None = None
+            _i: int = 0
+
+            def complete(self, system_prompt: str, user_prompt: str) -> str:
+                resp = self.responses[self._i]
+                self._i += 1
+                # Simulate the SDK populating usage after each call.
+                self.last_input_tokens = 100 + self._i
+                self.last_output_tokens = 200 + self._i
+                return resp
+
+        converter = MeteredFakeClient(responses=[VALID_WORKFLOW])
+        reviewer = MeteredFakeClient(
+            responses=['{"approved": true, "issues": []}'],
+            model="claude-haiku-4-5-20251001",
+        )
+        pipeline.run(
+            JENKINSFILE,
+            self.output_path,
+            converter_client=converter,
+            reviewer_client=reviewer,
+        )
+        content = self.transcript_path.read_text()
+        self.assertIn(
+            "### Converter response (model: claude-opus-4-7, "
+            "input_tokens: 101, output_tokens: 201)",
+            content,
+        )
+        self.assertIn(
+            "### Reviewer response (model: claude-haiku-4-5-20251001, "
+            "input_tokens: 101, output_tokens: 201)",
+            content,
+        )
+
+    def test_transcript_response_headers_omit_unknown_metadata(self) -> None:
+        """Fake clients with no model/tokens leave the headers unannotated."""
+        fake = SequentialFakeClient(responses=[
+            VALID_WORKFLOW,
+            '{"approved": true, "issues": []}',
+        ])
+        pipeline.run(JENKINSFILE, self.output_path, converter_client=fake, reviewer_client=fake)
+        content = self.transcript_path.read_text()
+        # No parenthetical when metadata is absent.
+        self.assertIn("### Converter response\n", content)
+        self.assertIn("### Reviewer response\n", content)
+        self.assertNotIn("### Converter response (", content)
+        self.assertNotIn("### Reviewer response (", content)
+
     def test_transcript_contains_both_system_prompts(self) -> None:
         """The transcript must include the converter and reviewer system
         prompts verbatim so a demo viewer can see exactly what each agent

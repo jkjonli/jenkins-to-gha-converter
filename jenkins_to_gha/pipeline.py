@@ -23,12 +23,19 @@ from .reviewer import ReviewResult, review
 
 @dataclass
 class _Exchange:
-    """A single LLM call: role, prompts sent, response received."""
+    """A single LLM call: role, prompts sent, response received, and
+    best-effort metadata (model name + token usage) snapshotted from the
+    client after the call. Metadata fields are ``None`` for clients that
+    don't expose them (e.g. test fakes).
+    """
 
     role: str  # "converter" or "reviewer"
     system_prompt: str
     user_prompt: str
     response: str
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 @dataclass
@@ -57,6 +64,9 @@ class _RecordingClient:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response=response,
+                model=getattr(self._inner, "model", None),
+                input_tokens=getattr(self._inner, "last_input_tokens", None),
+                output_tokens=getattr(self._inner, "last_output_tokens", None),
             )
         )
         return response
@@ -161,6 +171,24 @@ def _transcript_path(output_path: Path | str) -> Path:
     return p.with_suffix(".transcript.md")
 
 
+def _response_header_suffix(exchange: _Exchange) -> str:
+    """Build the parenthetical ``(model: X, input_tokens: N, ...)`` suffix
+    for a response header. Returns an empty string when no metadata is
+    available so clients that don't surface model/usage (e.g. test fakes)
+    produce clean, unannotated headers.
+    """
+    fields: list[str] = []
+    if exchange.model is not None:
+        fields.append(f"model: {exchange.model}")
+    if exchange.input_tokens is not None:
+        fields.append(f"input_tokens: {exchange.input_tokens}")
+    if exchange.output_tokens is not None:
+        fields.append(f"output_tokens: {exchange.output_tokens}")
+    if not fields:
+        return ""
+    return " (" + ", ".join(fields) + ")"
+
+
 def _write_transcript(exchanges: list[_Exchange], output_path: Path | str) -> None:
     """Write a Markdown transcript of all converter/reviewer exchanges."""
     path = _transcript_path(output_path)
@@ -182,7 +210,7 @@ def _write_transcript(exchanges: list[_Exchange], output_path: Path | str) -> No
             lines.append("")
             lines.append(ex.user_prompt)
             lines.append("")
-            lines.append("### Converter response")
+            lines.append(f"### Converter response{_response_header_suffix(ex)}")
             lines.append("")
             lines.append("```yaml")
             lines.append(ex.response.rstrip("\n"))
@@ -197,7 +225,7 @@ def _write_transcript(exchanges: list[_Exchange], output_path: Path | str) -> No
             lines.append("")
             lines.append(ex.user_prompt)
             lines.append("")
-            lines.append("### Reviewer response")
+            lines.append(f"### Reviewer response{_response_header_suffix(ex)}")
             lines.append("")
             lines.append("```json")
             lines.append(ex.response.strip())
