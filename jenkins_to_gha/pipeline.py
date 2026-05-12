@@ -35,10 +35,7 @@ def _load_minimal_system_prompt() -> str:
     pipeline-post terminal jobs, artifact naming, execution-model
     differences). The model produces multiple natural defects that the
     reviewer catches; iteration 2 (using the full prompt + reviewer
-    feedback) corrects them. This is preferred over a single-defect
-    sabotage instruction because the reviewer too easily hallucinates
-    a single missing element into its `checked` walkthrough and
-    approves anyway.
+    feedback) corrects them. 
     """
     if not _MINIMAL_PROMPT_PATH.exists():
         raise FileNotFoundError(
